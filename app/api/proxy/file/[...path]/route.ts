@@ -155,7 +155,11 @@ export async function GET(
       // Stitching Mode
       cleanName = cleanName.replace(/\.part\d+.*$/, "");
 
-      const fileUrls = files.map((f: string) => pb.files.getURL(record, f));
+      // Generate a file token for protected file access
+      const fileToken = await pb.files.getToken();
+      const fileUrls = files.map((f: string) =>
+        pb.files.getURL(record, f, { token: fileToken })
+      );
 
       streamBody = makeStitchedStream(
         fileUrls,
@@ -167,11 +171,14 @@ export async function GET(
       // We might default to octet-stream or try to guess from cleanName ext
     } else {
       // Single File Mode
+      // Generate a file token for protected file access
+      const fileToken = await pb.files.getToken();
+
       // Forward 'thumb' parameter to PocketBase
       const fileUrl = pb.files.getURL(
         record,
         filename,
-        thumb ? { thumb } : undefined
+        thumb ? { thumb, token: fileToken } : { token: fileToken }
       );
       const response = await fetch(fileUrl, {
         headers: { Authorization: pb.authStore.token },

@@ -54,10 +54,10 @@ export default function GlobalRail({ user }: { user?: { id: string; name: string
           </button>
         ))
         }
-      </div >
+      </div>
 
       {/* Profile Section */}
-      < div className="mt-auto w-full px-2 flex justify-center" >
+      <div className="mt-auto w-full px-2 flex justify-center">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="relative w-10 h-10 rounded-full bg-slate-800 overflow-hidden border-2 border-slate-700 hover:border-indigo-500 transition-colors shadow-lg group">
@@ -71,13 +71,6 @@ export default function GlobalRail({ user }: { user?: { id: string; name: string
               )}
             </button>
           </DropdownMenuTrigger>
-          {/* 
-             Custom Positioning for Rail Menu:
-             - left-[120%]: Move to the right of the button (rail width is small)
-             - bottom-0: Align bottom of menu with bottom of button
-             - ml-4: Add some spacing
-             - origin-bottom-left: Animation origin
-          */}
           <DropdownMenuContent
             className="w-60 left-[120%] bottom-0 ml-4 mb-2 origin-bottom-left"
             align="start"
@@ -100,7 +93,7 @@ export default function GlobalRail({ user }: { user?: { id: string; name: string
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-      </div >
-    </div >
+      </div>
+    </div>
   );
 }

@@ -17,7 +17,8 @@ import {
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
-import { createForm } from "@/app/actions/cowork";
+import { createForm, createDoc, deleteForm, deleteDoc } from "@/app/actions/cowork";
+import { Trash2, MoreVertical } from "lucide-react";
 
 const templates = [
   { id: "t1", title: "빈 문서", type: "doc", icon: FileText, color: "bg-blue-500" },
@@ -27,30 +28,19 @@ const templates = [
   { id: "t5", title: "피드백 설문", type: "form", icon: FormInput, color: "bg-purple-500" },
 ];
 
-export default function CoworkInterface({ initialForms = [] }: { initialForms?: { id: string, title: string, updated: string }[] }) {
+export default function CoworkInterface({ initialItems = [] }: { initialItems?: any[] }) {
   const router = useRouter();
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-
-  // Transform initialForms to match UI structure if needed, or unify types.
-  // Assuming 'forms' come from PB.
-  const forms = initialForms.map(f => ({
-    id: f.id,
-    title: f.title,
-    type: 'form',
-    owner: 'Me', // We know it's ours for now
-    updated: new Date(f.updated).toLocaleDateString(),
-    starred: false // PB doesn't have starred yet
-  }));
-
-  // Combine with other mock data? Or just show forms for now since that's what we have.
-  // For demo, let's keep mock docs but prepend forms.
-  const allFiles = [
-    ...forms,
-    ...[
-      { id: "m1", title: "1분기 로드맵", type: "doc", owner: "Hugo", updated: "2시간 전", starred: true },
-      { id: "m2", title: "2024년 예산안", type: "sheet", owner: "Finance", updated: "4시간 전", starred: false },
-    ]
-  ];
+  const [items, setItems] = useState(() =>
+    initialItems.map(item => ({
+      id: item.id,
+      title: item.title,
+      type: item.questions ? 'form' : 'doc',
+      owner: 'Me',
+      updated: new Date(item.updated).toLocaleDateString(),
+      starred: false
+    })).sort((a, b) => new Date(b.updated).getTime() - new Date(a.updated).getTime())
+  );
 
   const getIcon = (type: string) => {
     switch (type) {
@@ -65,22 +55,39 @@ export default function CoworkInterface({ initialForms = [] }: { initialForms?: 
 
   const handleCreate = async (type: string) => {
     if (type === 'form') {
-      // Call Server Action
       const result = await createForm();
       if (result.success && result.id) {
         router.push(`/dashboard/cowork/form/${result.id}`);
       } else {
         alert("설문지 생성 실패: " + result.error);
       }
+    } else if (type === 'doc') {
+      const result = await createDoc();
+      if (result.success && result.id) {
+        router.push(`/dashboard/cowork/doc/${result.id}`);
+      } else {
+        alert("문서 생성 실패: " + result.error);
+      }
     } else {
       alert(`${type} 생성 기능은 준비 중입니다!`);
     }
   };
 
+  const handleDelete = async (id: string, type: string) => {
+    if (!confirm("정말로 삭제하시겠습니까?")) return;
+
+    const res = type === 'form' ? await deleteForm(id) : await deleteDoc(id);
+    if (res.success) {
+      setItems(prev => prev.filter(item => item.id !== id));
+    } else {
+      alert("삭제 실패: " + res.error);
+    }
+  };
+
   return (
-    <div className="flex-1 flex flex-col min-w-0 bg-[#F8FAFC]">
+    <div className="flex-1 flex flex-col min-w-0 bg-[#F8FAFC] relative">
       {/* Header */}
-      <header className="h-18 px-8 py-4 flex items-center justify-between shrink-0 sticky top-0 z-10 bg-[#F8FAFC]/80 backdrop-blur-md">
+      <header className="h-18 px-8 py-4 flex items-center justify-between shrink-0 sticky top-0 z-40 bg-[#F8FAFC]/80 backdrop-blur-md border-b border-transparent">
         <div className="flex items-center gap-4">
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
             Cowork
@@ -117,7 +124,7 @@ export default function CoworkInterface({ initialForms = [] }: { initialForms?: 
 
           <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide -mx-4 px-4">
             {/* Blank Template */}
-            <div className="flex flex-col gap-3 group cursor-pointer shrink-0" onClick={() => { }}>
+            <div className="flex flex-col gap-3 group cursor-pointer shrink-0" onClick={() => handleCreate('doc')}>
               <div className="w-40 h-32 bg-white rounded-2xl border border-slate-100 shadow-sm group-hover:shadow-lg group-hover:-translate-y-1 transition-all duration-300 flex items-center justify-center relative overflow-hidden">
                 <div className="absolute inset-0 bg-gradient-to-br from-indigo-50/50 to-purple-50/50 opacity-0 group-hover:opacity-100 transition-opacity" />
                 <Plus className="w-8 h-8 text-indigo-500 group-hover:scale-110 transition-transform duration-300" />
@@ -165,10 +172,16 @@ export default function CoworkInterface({ initialForms = [] }: { initialForms?: 
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-            {allFiles.map(file => (
-              <div key={file.id} className="group bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-xl hover:shadow-indigo-500/10 hover:-translate-y-1 transition-all duration-300 cursor-pointer flex flex-col overflow-hidden h-64">
+            {items.map(file => (
+              <div key={file.id} className="group bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-xl hover:shadow-indigo-500/10 hover:-translate-y-1 transition-all duration-300 cursor-pointer flex flex-col overflow-hidden h-64 relative">
                 {/* Preview Area */}
-                <div className="flex-1 bg-slate-50/50 relative p-6 flex flex-col gap-3 group-hover:bg-slate-50 transition-colors">
+                <div
+                  className="flex-1 bg-slate-50/50 relative p-6 flex flex-col gap-3 group-hover:bg-slate-50 transition-colors"
+                  onClick={() => {
+                    if (file.type === 'form') router.push(`/dashboard/cowork/form/${file.id}`);
+                    else if (file.type === 'doc') router.push(`/dashboard/cowork/doc/${file.id}`);
+                  }}
+                >
                   <div className="w-full h-3 bg-slate-200/50 rounded-full" />
                   <div className="w-3/4 h-3 bg-slate-200/50 rounded-full" />
                   <div className="space-y-2 mt-4">
@@ -179,14 +192,9 @@ export default function CoworkInterface({ initialForms = [] }: { initialForms?: 
 
                   {/* Hover Overlay */}
                   <div className="absolute inset-0 bg-indigo-500/5 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <button
-                      onClick={() => {
-                        if (file.type === 'form') router.push(`/dashboard/cowork/form/${file.id}`);
-                        else alert("준비 중입니다.");
-                      }}
-                      className="bg-white/90 backdrop-blur text-indigo-600 px-4 py-2 rounded-full font-medium text-sm shadow-md transform scale-95 group-hover:scale-100 transition-all">
+                    <div className="bg-white/90 backdrop-blur text-indigo-600 px-4 py-2 rounded-full font-medium text-sm shadow-md transform scale-95 group-hover:scale-100 transition-all">
                       열기
-                    </button>
+                    </div>
                   </div>
                 </div>
 
@@ -194,13 +202,27 @@ export default function CoworkInterface({ initialForms = [] }: { initialForms?: 
                 <div className="p-4 border-t border-slate-50 bg-white relative z-10">
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <h3 className="font-semibold text-slate-800 text-sm truncate flex-1 group-hover:text-indigo-600 transition-colors">{file.title}</h3>
-                    <div className="p-1.5 bg-slate-50 rounded-lg shrink-0">
-                      {getIcon(file.type)}
-                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button onClick={(e) => e.stopPropagation()} className="p-1 hover:bg-slate-100 rounded text-slate-400">
+                          <MoreVertical className="w-4 h-4" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="rounded-xl">
+                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleDelete(file.id, file.type); }} className="text-red-600 focus:text-red-700 focus:bg-red-50 cursor-pointer p-2.5">
+                          <Trash2 className="w-4 h-4 mr-2" /> 삭제
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                   <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
-                    <span>{file.updated}</span>
-                    <button className="hover:text-amber-400 transition-colors p-1 -mr-1">
+                    <div className="flex items-center gap-2">
+                      <div className="p-1 bg-slate-50 rounded shrink-0">
+                        {getIcon(file.type)}
+                      </div>
+                      <span>{file.updated}</span>
+                    </div>
+                    <button onClick={(e) => e.stopPropagation()} className="hover:text-amber-400 transition-colors p-1 -mr-1">
                       <Star className={cn("w-4 h-4", file.starred ? "text-amber-400 fill-amber-400" : "")} />
                     </button>
                   </div>
@@ -213,14 +235,14 @@ export default function CoworkInterface({ initialForms = [] }: { initialForms?: 
       </main>
 
       {/* Floating Action Button */}
-      <div className="absolute right-8 bottom-8">
+      <div className="fixed right-8 bottom-8 z-[60]">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="w-16 h-16 bg-slate-900 hover:bg-indigo-600 rounded-full shadow-2xl shadow-indigo-500/30 text-white flex items-center justify-center transition-all hover:scale-105 active:scale-95 group">
               <Plus className="w-8 h-8 group-hover:rotate-90 transition-transform duration-500" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" sideOffset={20} className="w-64 p-2 rounded-2xl border-slate-100 shadow-xl bg-white/90 backdrop-blur-xl">
+          <DropdownMenuContent side="top" align="end" sideOffset={15} className="w-64 p-2 rounded-2xl border-slate-100 shadow-2xl bg-white/95 backdrop-blur-xl z-[70]">
             <DropdownMenuItem className="p-3 cursor-pointer rounded-xl focus:bg-blue-50 focus:text-blue-700 transition-colors" onClick={() => handleCreate('doc')}>
               <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center mr-4 text-blue-600 shadow-sm">
                 <FileText className="w-5 h-5" />
@@ -251,7 +273,6 @@ export default function CoworkInterface({ initialForms = [] }: { initialForms?: 
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-
     </div>
   );
 }

@@ -134,9 +134,9 @@ export async function POST(request: NextRequest) {
       record = await pb.collection("cloud").update(recordId, formData);
       console.log(`[Upload] Update complete. Files now:`, record.file);
     } else {
-      // NEW RECORD: Default sharing to off
-      formData.set("share_type", "none");
-      formData.set("is_shared", "false");
+      // NEW RECORD: Default sharing to off if not provided
+      if (!formData.has("share_type")) formData.set("share_type", "none");
+      if (!formData.has("is_shared")) formData.set("is_shared", "false");
       record = await pb.collection("cloud").create(formData);
     }
 
