@@ -5,7 +5,7 @@ import pb from "@/lib/pocketbase";
 import {
   Search, Upload, File as FileIcon, Trash2,
   Share2, Grid, List as ListIcon,
-  User, FolderOpen, Loader2, Folder as FolderIcon, Plus, ChevronRight, Home, ArrowUp, Users, ArrowUpDown, MoreVertical, Edit2, FolderInput, HardDrive
+  User, FolderOpen, Loader2, Folder as FolderIcon, ChevronRight, Home, ArrowUp, Users, ArrowUpDown, MoreVertical, Edit2, FolderInput, HardDrive
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -48,7 +48,7 @@ type FolderRecord = {
 };
 
 export default function DriveInterface({ user }: { user: { id: string; email: string; name: string; token: string } }) {
-  const router = useRouter();
+
   const [tab, setTab] = useState<'personal' | 'team'>('personal');
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [folders, setFolders] = useState<FolderRecord[]>([]);
@@ -721,13 +721,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
   );
 }
 
-function TabButton({ children, active, onClick }: { children: React.ReactNode, active: boolean, onClick: () => void }) {
-  return (
-    <button onClick={onClick} className={cn("px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2", active ? "bg-white shadow-sm text-slate-900" : "text-slate-500 hover:text-slate-700")}>
-      {children}
-    </button>
-  )
-}
+
 
 function FolderCard({ folder, viewMode, onClick, onDelete, onRename }: { folder: FolderRecord, viewMode: 'grid' | 'list', onClick: () => void, onDelete: () => void, onRename: () => void }) {
   return (

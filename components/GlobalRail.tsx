@@ -2,22 +2,21 @@
 
 import { cn } from "@/lib/utils";
 import { HardDrive, Layout, Users, Settings, LogOut } from "lucide-react";
-import { useState } from "react";
+
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 
 export default function GlobalRail({ user }: { user?: { id: string; name: string; email: string; avatar?: string } }) {
-  const [activeService, setActiveService] = useState<'drive' | 'pages' | 'cowork'>('drive');
   const router = useRouter();
+  const pathname = usePathname();
+  const activeService = pathname.includes('/pages') ? 'pages' : pathname.includes('/cowork') ? 'cowork' : 'drive';
 
   const services = [
-    { id: 'drive', icon: HardDrive, label: 'Drive' },
-    { id: 'pages', icon: Layout, label: 'Pages' },
-    { id: 'cowork', icon: Users, label: 'Cowork' },
+    { id: 'drive', icon: HardDrive, label: 'Drive', path: '/dashboard/drive' },
+    { id: 'pages', icon: Layout, label: 'Pages', path: '/dashboard/pages' },
+    { id: 'cowork', icon: Users, label: 'Cowork', path: '/dashboard/cowork' },
   ] as const;
 
-  // Avatar URL Construction
-  // Check if avatar is already a URL (http/https) or a filename
   const avatarUrl = user?.avatar
     ? (user.avatar.startsWith('http')
       ? user.avatar
@@ -27,15 +26,15 @@ export default function GlobalRail({ user }: { user?: { id: string; name: string
   return (
     <div className="w-16 md:w-20 bg-slate-900 flex flex-col items-center py-6 gap-6 z-50 shrink-0 h-screen sticky top-0">
       {/* Logo/Brand (Simple dot for now or small logo) */}
-      <div className="w-10 h-10 bg-indigo-500 rounded-xl mb-4 shadow-lg shadow-indigo-500/30 flex items-center justify-center text-white font-bold text-xl">
-        M
+      <div className="w-10 h-10 mb-6 flex items-center justify-center">
+        <img src="/monacle.svg" alt="Monacle Logo" className="w-full h-full object-contain" />
       </div>
 
       <div className="flex flex-col gap-4 w-full px-2">
         {services.map((service) => (
           <button
             key={service.id}
-            onClick={() => setActiveService(service.id)}
+            onClick={() => router.push(service.path)}
             className={cn(
               "group relative w-full aspect-square flex flex-col items-center justify-center rounded-2xl transition-all duration-300",
               activeService === service.id
@@ -53,11 +52,12 @@ export default function GlobalRail({ user }: { user?: { id: string; name: string
               <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-500 rounded-r-full" />
             )}
           </button>
-        ))}
-      </div>
+        ))
+        }
+      </div >
 
       {/* Profile Section */}
-      <div className="mt-auto w-full px-2 flex justify-center">
+      < div className="mt-auto w-full px-2 flex justify-center" >
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="relative w-10 h-10 rounded-full bg-slate-800 overflow-hidden border-2 border-slate-700 hover:border-indigo-500 transition-colors shadow-lg group">
@@ -100,7 +100,7 @@ export default function GlobalRail({ user }: { user?: { id: string; name: string
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-      </div>
-    </div>
+      </div >
+    </div >
   );
 }

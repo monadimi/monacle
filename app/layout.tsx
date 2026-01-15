@@ -7,6 +7,10 @@ const inter = Inter({ subsets: ["latin"] });
 export const metadata: Metadata = {
   title: "Monacle Cloud",
   description: "Secure Cloud Storage for Monad",
+  icons: {
+    icon: "/monacle.svg",
+    shortcut: "/monacle.svg",
+  },
 };
 
 export default function RootLayout({

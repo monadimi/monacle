@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
-import { ArrowRight, Cloud } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 
 export default function LoginPage() {
   const startLogin = async () => {
@@ -43,8 +43,8 @@ export default function LoginPage() {
       <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-violet-500/20 rounded-full blur-[120px] pointer-events-none" />
 
       <div className="glass-panel w-full max-w-md p-8 md:p-12 relative z-10 flex flex-col items-center text-center">
-        <div className="w-20 h-20 bg-indigo-600 rounded-2xl flex items-center justify-center mb-8 shadow-lg shadow-indigo-500/30 transform rotate-3">
-          <Cloud className="w-10 h-10 text-white" />
+        <div className="w-20 h-20 bg-slate-50 rounded-2xl flex items-center justify-center mb-8 shadow-lg shadow-slate-200 transform rotate-3 overflow-hidden p-4">
+          <img src="/monacle.svg" alt="Monacle Logo" className="w-full h-full object-contain" />
         </div>
 
         <h1 className="text-3xl md:text-4xl font-bold mb-3 tracking-tight text-slate-900">

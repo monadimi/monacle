@@ -216,7 +216,7 @@ export async function listFiles(
     // So if options.type is present and not 'all', we return empty folders.
 
     let folderFilter = serverFilter;
-    let shouldFetchFolders = !options.type || options.type === "all";
+    const shouldFetchFolders = !options.type || options.type === "all";
 
     if (shouldFetchFolders) {
       if (options.search) {

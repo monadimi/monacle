@@ -1,30 +1,5 @@
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import DriveInterface from "@/components/DriveInterface";
-import GlobalRail from "@/components/GlobalRail";
 
-export default async function DashboardPage() {
-  const cookieStore = await cookies();
-  const session = cookieStore.get("monacle_session");
-
-  if (!session?.value) {
-    redirect("/");
-  }
-
-  let user;
-  try {
-    user = JSON.parse(session.value);
-  } catch {
-    redirect("/");
-  }
-
-  return (
-    <div className="flex min-h-screen bg-slate-50/50">
-      <GlobalRail user={user} />
-      <div className="flex-1 flex overflow-hidden">
-        {/* DriveInterface will handle its own internal layout, but here it takes full remaining width */}
-        <DriveInterface user={user} />
-      </div>
-    </div>
-  );
+export default function DashboardPage() {
+  redirect("/dashboard/drive");
 }
