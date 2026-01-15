@@ -48,10 +48,10 @@ async function getOrCreateTeamUser(pb: PocketBase) {
         type: "monad",
       });
       return user.id;
-    } catch (createError: any) {
+    } catch (createError: unknown) {
       console.error(
         "Team User Creation Error Details:",
-        JSON.stringify(createError.data, null, 2)
+        JSON.stringify((createError as any).data, null, 2)
       );
       throw createError;
     }
@@ -95,9 +95,9 @@ export async function createFolder(
     });
 
     return { success: true, record: JSON.parse(JSON.stringify(record)) };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Create Folder Failed:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -146,13 +146,13 @@ export async function uploadFile(formData: FormData) {
 
     // Return plain object (strip methods if any)
     return { success: true, record: JSON.parse(JSON.stringify(record)) };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Server Action Upload Failed:", error);
     // Return serializable error object
     return {
       success: false,
-      error: error.message || "Upload failed",
-      details: error.data,
+      error: (error as Error).message || "Upload failed",
+      details: (error as any).data,
     };
   }
 }
@@ -160,7 +160,12 @@ export async function uploadFile(formData: FormData) {
 export async function listFiles(
   page: number = 1,
   perPage: number = 50,
-  options: { filter?: string; sort?: string; folderId?: string | null } = {}
+  options: {
+    filter?: string;
+    sort?: string;
+    folderId?: string | null;
+    search?: string;
+  } = {}
 ) {
   try {
     // 1. Verify Session
@@ -184,6 +189,14 @@ export async function listFiles(
     if (serverFilter.includes("TEAM_MONAD")) {
       const teamId = await getOrCreateTeamUser(pb);
       serverFilter = serverFilter.replace(/TEAM_MONAD/g, teamId);
+    }
+
+    // Apply Search Filter to Files (file ~ search OR name ~ search)
+    if (options.search) {
+      // Note: PocketBase ~ operator is contains (case-insensitive usually)
+      serverFilter +=
+        (serverFilter ? " && " : "") +
+        `(file ~ "${options.search}" || name ~ "${options.search}")`;
     }
 
     // Handle Folder Filtering
@@ -241,6 +254,11 @@ export async function listFiles(
         folderFilter += ` && parent = ""`;
       }
 
+      // Apply Search to Folders
+      if (options.search) {
+        folderFilter += ` && name ~ "${options.search}"`;
+      }
+
       const folderRecords = await pb.collection("folders").getFullList({
         sort: "-created",
         filter: folderFilter,
@@ -255,11 +273,11 @@ export async function listFiles(
       totalItems: files.totalItems,
       totalPages: files.totalPages,
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Server Action List Failed:", error);
     return {
       success: false,
-      error: error.message || "List failed",
+      error: (error as Error).message || "List failed",
       items: [],
       folders: [],
     };
@@ -293,9 +311,9 @@ export async function deleteFile(id: string) {
     await pb.collection("cloud").delete(id);
 
     return { success: true };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Server Action Delete Failed:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -343,9 +361,9 @@ export async function deleteFolder(id: string) {
     await pb.collection("folders").delete(id);
 
     return { success: true };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Server Action Delete Folder Failed:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -378,9 +396,9 @@ export async function updateFileShare(
     await pb.collection("cloud").update(id, data);
 
     return { success: true };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Server Action Share Update Failed:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -417,8 +435,34 @@ export async function updateFile(
     await pb.collection("cloud").update(id, data);
 
     return { success: true };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Server Action Update File Failed:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: (error as Error).message };
+  }
+}
+
+export async function updateFolder(
+  id: string,
+  data: { name?: string; parent?: string }
+) {
+  try {
+    const cookieStore = await cookies();
+    const session = cookieStore.get("monacle_session");
+    if (!session?.value) throw new Error("Unauthorized");
+    const user = JSON.parse(session.value);
+
+    const pb = await getAdminClient();
+    const record = await pb.collection("folders").getOne(id);
+    const teamId = await getOrCreateTeamUser(pb);
+
+    if (record.owner !== user.id && record.owner !== teamId) {
+      throw new Error("Forbidden");
+    }
+
+    await pb.collection("folders").update(id, data);
+    return { success: true };
+  } catch (error: unknown) {
+    console.error("Server Action Update Folder Failed:", error);
+    return { success: false, error: (error as Error).message };
   }
 }

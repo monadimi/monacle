@@ -1,11 +1,11 @@
 "use client";
 
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Copy, Download, Trash2, Globe, Lock, Share2, X, Edit2, FolderInput, FileText, Film, Music } from "lucide-react";
-import { useState, useEffect } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Copy, Download, Trash2, Globe, Lock, Share2, X, Music, FileText, FolderInput } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { updateFileShare, updateFile, listFiles } from "@/app/actions/cloud";
+import { updateFileShare, updateFile, listFiles, updateFolder } from "@/app/actions/cloud";
 
 // Reusing FileRecord type or importing if shared. 
 // For now duplicating simplified version to avoid circular deps if not in a types file.
@@ -19,6 +19,7 @@ type FileRecord = {
   is_shared: boolean;
   short_id?: string;
   created: string;
+  updated: string; // Added updated field
   name?: string; // Added name field
   size?: number;
   expand?: {
@@ -27,6 +28,17 @@ type FileRecord = {
       email?: string;
     }
   }
+};
+
+type FolderRecord = {
+  id: string;
+  collectionId: string;
+  collectionName: string;
+  name: string;
+  owner: string;
+  parent: string;
+  created: string;
+  updated: string;
 };
 
 export function FileDetailModal({
@@ -42,14 +54,18 @@ export function FileDetailModal({
   onDownload?: () => void,
   onDelete?: () => void
 }) {
-  if (!file) return null;
+  // derive variables safely
+  // Add cache buster to prevent sticky Content-Disposition headers from previous requests
+  // Use file.created/updated as stable cache key
+  const timestamp = file && 'updated' in file ? new Date(file.updated).getTime() : 0;
 
-  const fileUrl = file.file && file.file.length > 0
-    ? `/api/proxy/file/${file.collectionId}/${file.id}/${file.file[0]}`
+  const fileUrl = (file as FileRecord)?.file && (file as FileRecord).file.length > 0
+    ? `/api/proxy/file/${file?.collectionId}/${file?.id}/${(file as FileRecord).file[0]}?t=${timestamp}`
     : null;
 
-  const ext = file.file?.[0]?.split('.').pop()?.toLowerCase();
+  const ext = file?.file?.[0]?.split('.').pop()?.toLowerCase();
   const isImage = ext?.match(/^(jpg|jpeg|png|gif|webp|svg)$/);
+
   const isVideo = ext?.match(/^(mp4|webm|ogg|mov)$/);
   const isAudio = ext?.match(/^(mp3|wav|ogg)$/);
   const isPDF = ext === 'pdf';
@@ -62,6 +78,8 @@ export function FileDetailModal({
       fetch(fileUrl).then(res => res.text()).then(setTextContent).catch(() => setTextContent("Failed to load content"));
     }
   }, [isOpen, isText, fileUrl]);
+
+  if (!file) return null;
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -108,8 +126,8 @@ export function FileDetailModal({
               {ext || "?"}
             </div>
             <div className="min-w-0">
-              <h2 className="font-bold text-slate-800 truncate max-w-md" title={file.file?.[0]}>
-                {file.file?.[0]}
+              <h2 className="font-bold text-slate-800 truncate max-w-md" title={file.name || file.file?.[0]}>
+                {file.name || file.file?.[0]}
               </h2>
               <div className="flex items-center gap-2 text-xs text-slate-500">
                 <span>{new Date(file.created).toLocaleDateString()}</span>
@@ -145,38 +163,45 @@ export function RenameModal({
 }: {
   isOpen: boolean,
   onClose: () => void,
-  file: FileRecord | null, // Can accept FolderRecord too if types aligned
+  file: FileRecord | FolderRecord | null,
   onUpdate: () => void
 }) {
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // Helper to determine if it is a folder (check for 'file' property or specific folder props)
+  // Folder has no 'file' array usually in this schema, or we rely on duck typing
+  const isFolder = file && !('file' in file) && !file.collectionId?.includes('cloud');
+
   useEffect(() => {
     if (file) {
-      // Logic to get clean name (remove random ID suffix if it's a file, or just name if folder/mapped)
-      // Assuming 'name' field is primary if we migrated, else parse file path
-      // Note: User wants to edit NAME. Our schema update added 'name'. 
-      // If 'name' is empty (legacy), we might parse it. But let's assume we use 'name' field from now.
-      // const currentName = (file as any).name || file.file?.[0]; 
-      // Actually updateFile affects 'name' field. 
-      const initialName = (file as any).name || (file.file?.[0] ? file.file[0].replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1') : "");
-      setName(initialName);
+      if (isFolder) {
+        setName(file.name || "");
+      } else {
+        // File logic
+        const f = file as FileRecord;
+        const initialName = f.name || (f.file?.[0] ? f.file[0].replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1') : "");
+        setName(initialName);
+      }
     }
-  }, [file]);
+  }, [file, isFolder]);
 
   const handleSubmit = async () => {
     if (!file || !name.trim()) return;
     setLoading(true);
     try {
-      // NOTE: We are using updateFile which targets 'cloud' collection. 
-      // If we want to rename folders, we need a separate action or modify updateFile to handle collections.
-      // For now assuming File Rename.
-      const result = await updateFile(file.id, { name: name });
+      let result;
+      if (isFolder) {
+        result = await updateFolder(file.id, { name: name });
+      } else {
+        result = await updateFile(file.id, { name: name });
+      }
+
       if (!result.success) throw new Error(result.error);
       onUpdate();
       onClose();
-    } catch (e: any) {
-      alert("이름 변경 실패: " + e.message);
+    } catch (e: unknown) {
+      alert("이름 변경 실패: " + (e as Error).message);
     } finally {
       setLoading(false);
     }
@@ -198,6 +223,7 @@ export function RenameModal({
               if (e.nativeEvent.isComposing) return;
               if (e.key === 'Enter') handleSubmit();
             }}
+            aria-label="New name"
           />
           <button
             onClick={handleSubmit}
@@ -224,37 +250,16 @@ export function MoveModal({
   onUpdate: () => void
 }) {
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
-  const [folders, setFolders] = useState<any[]>([]);
+  const [folders, setFolders] = useState<FolderRecord[]>([]); // Changed from any[]
   const [loading, setLoading] = useState(false);
   const [moving, setMoving] = useState(false);
   const [history, setHistory] = useState<string[]>([]); // To track back navigation
 
-  useEffect(() => {
-    if (isOpen) {
-      setCurrentFolderId(null);
-      setHistory([]);
-      fetchFolders(null);
-    }
-  }, [isOpen]);
-
-  const fetchFolders = async (parentId: string | null) => {
+  const fetchFolders = useCallback(async (parentId: string | null) => {
     setLoading(true);
     try {
       // Reuse listFiles but we only care about folders. 
-      // Note: listFiles returns folders for current view.
-      // We need to pass the correct owner too (Personal vs Team). 
-      // Ideally we check file.owner to decide which space to browse, but mixed spaces might be tricky.
-      // For now assume moving within same space (owner).
-
       const ownerFilter = file?.owner === "TEAM_MONAD" || file?.owner?.includes("team") ? "TEAM_MONAD" : undefined;
-      // We don't have user ID here easily to filter personal, 
-      // but listFiles handles session check.
-      // If file is personal, we want to see personal folders.
-
-      // Let's rely on listFiles default behavior which checks session user.
-      // If we are moving a Team file, we might be in Team view. 
-      // But modal is isolated. 
-      // Let's pass "root" if parentId is null.
 
       const result = await listFiles(1, 100, {
         folderId: parentId || "root",
@@ -269,9 +274,25 @@ export function MoveModal({
     } finally {
       setLoading(false);
     }
-  };
+  }, [file]);
 
-  const handleEnterFolder = (folder: any) => {
+  useEffect(() => {
+    if (currentFolderId || currentFolderId === "") {
+      fetchFolders(currentFolderId === "" ? "root" : currentFolderId);
+    }
+  }, [currentFolderId, fetchFolders]);
+
+  useEffect(() => {
+    if (isOpen) {
+      setCurrentFolderId(null);
+      setHistory([]);
+      fetchFolders(null);
+    }
+  }, [isOpen]);
+
+
+
+  const handleEnterFolder = (folder: FolderRecord) => { // Changed folder type
     setHistory([...history, currentFolderId || "root"]);
     setCurrentFolderId(folder.id);
     fetchFolders(folder.id);
@@ -289,6 +310,10 @@ export function MoveModal({
 
   const handleMove = async () => {
     if (!file) return;
+    if (!currentFolderId && currentFolderId !== "") { // Allow moving to root (empty string)
+      alert("폴더를 선택해주세요.");
+      return;
+    }
     if (file.id === currentFolderId) return; // Can't move into self (if it was a folder)
 
     setMoving(true);
@@ -297,8 +322,8 @@ export function MoveModal({
       if (!result.success) throw new Error(result.error);
       onUpdate();
       onClose();
-    } catch (e: any) {
-      alert("이동 실패: " + e.message);
+    } catch (e: unknown) {
+      alert("이동 실패: " + (e as Error).message);
     } finally {
       setMoving(false);
     }
@@ -332,7 +357,7 @@ export function MoveModal({
                   하위 폴더가 없습니다
                 </div>
               ) : (
-                folders.map((folder: any) => (
+                folders.map((folder: FolderRecord) => ( // Changed folder type
                   <button
                     key={folder.id}
                     onClick={() => handleEnterFolder(folder)}
@@ -417,8 +442,7 @@ export function ShareModal({
       } else {
         onUpdate();
       }
-    } catch (e) {
-      setIsShared(!newSharedState); // Revert
+    } catch { // removed unused 'e'
       alert("공유 설정 변경 실패");
     }
   };
@@ -440,16 +464,20 @@ export function ShareModal({
         setOriginalShortId(shortId);
         onUpdate();
       }
-    } catch (e) {
+    } catch {
       alert("링크 주소 저장 실패");
     } finally {
       setIsSavingSlug(false);
     }
   };
 
-  const copyLink = () => {
-    navigator.clipboard.writeText(shareUrl);
-    alert("링크가 복사되었습니다!");
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      alert("링크가 복사되었습니다!");
+    } catch {
+      alert("링크 복사 실패");
+    }
   };
 
   return (
@@ -458,7 +486,7 @@ export function ShareModal({
         <DialogHeader>
           <DialogTitle className="text-xl font-bold flex items-center gap-2">
             <Share2 className="w-5 h-5 text-indigo-600" />
-            &quot;{file.file?.[0]?.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1')}&quot; 공유
+            &quot;{file.name || file.file?.[0]?.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1')}&quot; 공유
           </DialogTitle>
         </DialogHeader>
 

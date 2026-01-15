@@ -5,7 +5,7 @@ import pb from "@/lib/pocketbase";
 import {
   Search, Upload, File as FileIcon, Trash2,
   Share2, Grid, List as ListIcon,
-  LogOut, User, FolderOpen, Loader2, Folder as FolderIcon, Plus, ChevronRight, Home, ArrowUp, Users, ArrowUpDown, Filter, MoreVertical, Edit2, FolderInput
+  LogOut, User, FolderOpen, Loader2, Folder as FolderIcon, Plus, ChevronRight, Home, ArrowUp, Users, ArrowUpDown, MoreVertical, Edit2, FolderInput
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -13,7 +13,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { uploadFile, listFiles, deleteFile, createFolder, deleteFolder } from "@/app/actions/cloud";
 import { FileDetailModal, ShareModal, MoveModal, RenameModal } from "@/components/FileModals";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "./ui/dropdown-menu";
 
 // ... Types (FileRecord, FolderRecord) can be imported or redefined. Keeping inline for single file edit simplicity if not shared.
 // Ideally share types. For now redefining locally to match FileModals.
@@ -58,7 +58,8 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
   // Initialize PocketBase Auth
   useEffect(() => {
     if (user?.token) {
-      pb.authStore.save(user.token, user as any);
+      // @ts-expect-error - User object has partial overlap with RecordModel
+      pb.authStore.save(user.token, user);
     }
   }, [user]);
 
@@ -88,8 +89,13 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
   const [isNewFolderOpen, setIsNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
 
+  // Pagination
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const PER_PAGE = 24; // ~20 items
+
   // Fetch Files & Folders
-  const refreshFiles = useCallback(async () => {
+  const refreshFiles = useCallback(async (targetPage = page) => {
     setLoading(true);
     try {
       const ownerFilter = tab === 'personal'
@@ -97,11 +103,6 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
         : `owner = "TEAM_MONAD"`;
 
       let filter = ownerFilter;
-
-      // Search
-      if (search) {
-        filter += ` && (file ~ "${search}" || name ~ "${search}")`;
-      }
 
       // Category Filter (Applying PB Syntax roughly)
       if (filterType === 'image') {
@@ -112,15 +113,22 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
         filter += ` && (file ~ '.pdf' || file ~ '.doc' || file ~ '.txt' || file ~ '.md' || file ~ '.json')`;
       }
 
-      const result = await listFiles(1, 50, {
+      // Search is now passed separately to handle sophisticated logic (name + file match) on server
+      // and to filter folders correctly.
+
+      const result = await listFiles(targetPage, PER_PAGE, {
         sort: sort,
         filter: filter,
-        folderId: currentFolder?.id || "root"
+        folderId: currentFolder?.id || "root",
+        search: search // Pass search term
       });
 
       if (result.success) {
         setFiles(result.items as unknown as FileRecord[]);
-        setFolders(result.folders as unknown as FolderRecord[]);
+        // Only show folders on first page or always? standard is mixed, but listFiles returns separately.
+        // Let's show folders only on page 1 to avoid duplication if API is stateless regarding folders
+        setFolders(targetPage === 1 ? result.folders as unknown as FolderRecord[] : []);
+        setTotalPages(result.totalPages || 1);
       } else {
         throw new Error(result.error);
       }
@@ -130,18 +138,26 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
     } finally {
       setLoading(false);
     }
-  }, [tab, search, user, currentFolder, sort, filterType]);
+  }, [tab, search, user, currentFolder, sort, filterType, page]);
 
   useEffect(() => {
-    refreshFiles();
+    refreshFiles(1); // Reset to page 1 on filter change
+    setPage(1);
     setNewFolderName("");
-  }, [refreshFiles]);
+  }, [tab, search, currentFolder, sort, filterType, refreshFiles]); // Added refreshFiles
 
-  // Folder Navigation
+  // Re-fetch when page changes (controlled by pagination UI)
+  useEffect(() => {
+    if (page > 1) refreshFiles(page);
+  }, [page, refreshFiles]); // Added refreshFiles
+
+
+  // ... navigation ...
   const handleEnterFolder = (folder: FolderRecord) => {
     setFolderPath([...folderPath, folder]);
     setCurrentFolder(folder);
     setSearch("");
+    setPage(1);
   };
 
   const handleNavigateUp = (index: number) => {
@@ -153,8 +169,10 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
       setFolderPath(newPath);
       setCurrentFolder(newPath[newPath.length - 1]);
     }
+    setPage(1);
   };
 
+  // Create Folder
   const handleCreateFolder = async () => {
     if (!newFolderName.trim()) return;
     try {
@@ -169,55 +187,94 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
       setIsNewFolderOpen(false);
       setNewFolderName("");
       refreshFiles();
-    } catch (e: any) {
-      alert("폴더 생성 실패: " + e.message);
+    } catch (e: unknown) {
+      alert("폴더 생성 실패: " + (e as Error).message);
     }
   };
 
   // Handlers
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement> | FileList) => {
-    const fileList = e instanceof Event || (e as any).target ? (e as React.ChangeEvent<HTMLInputElement>).target.files : e as FileList;
-    if (!fileList?.length) return;
-
+  const handleBatchUpload = async (fileList: FileList, folderName?: string) => {
     setUploading(true);
     setIsDragOver(false);
 
     try {
-      const formData = new FormData();
-      Array.from(fileList).forEach((file) => {
+      let targetFolderId = currentFolder ? currentFolder.id : "root";
+
+      // If creating a new folder for these files
+      if (folderName) {
+        const folderRes = await createFolder(
+          folderName,
+          targetFolderId === "root" ? null : targetFolderId,
+          tab === 'team' ? "TEAM_MONAD" : undefined
+        );
+        if (!folderRes.success) throw new Error("폴더 생성 실패. 업로드를 중단합니다.");
+        targetFolderId = folderRes.record.id;
+      }
+
+      // Upload Files
+      // Note: For large lists, this might be slow. Parallel limit?
+      const promises = Array.from(fileList).map(async (file) => {
+        const formData = new FormData();
         formData.append('file', file);
+        formData.append('owner', tab === 'personal' ? (user.id || user.email) : "TEAM_MONAD");
+        formData.append('is_shared', tab === 'team' ? 'true' : 'false');
+        formData.append('share_type', tab === 'team' ? 'view' : 'none');
+        if (targetFolderId !== "root") formData.append('folder', targetFolderId);
+        formData.append('name', file.name);
+        formData.append('short_id', Math.random().toString(36).substring(7));
+        return uploadFile(formData);
       });
 
-      formData.append('owner', tab === 'personal' ? (user.id || user.email) : "TEAM_MONAD");
-      formData.append('is_shared', tab === 'team' ? 'true' : 'false');
-      formData.append('share_type', tab === 'team' ? 'view' : 'none');
-
-      if (currentFolder) {
-        formData.append('folder', currentFolder.id);
-      } else {
-        formData.append('folder', 'root');
-      }
-
-      formData.append('name', fileList[0].name);
-      formData.append('short_id', Math.random().toString(36).substring(7));
-
-      const result = await uploadFile(formData);
-
-      if (!result.success) {
-        throw { message: result.error, data: result.details };
-      }
+      await Promise.all(promises);
 
       if (fileInputRef.current) fileInputRef.current.value = "";
+      if (folderInputRef.current) folderInputRef.current.value = "";
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Upload failed", err);
-      alert(`업로드 실패: ${err.message}`);
+      // @ts-expect-error - Error type is unknown
+      alert(`업로드 실패: ${err.message || "Unknown error"}`);
     } finally {
       setUploading(false);
       refreshFiles();
     }
+  }
+
+  const handleUploadInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    handleUploadProcess(files);
   };
 
+  const handleUploadProcess = async (files: FileList) => {
+    // 1. Folder Upload (detected via webkitRelativePath usually, but here we trigger via button)
+    // If we just want "Folder Upload" logic, the input (directory) gives us nested files.
+    // If user dragged a folder, files[0] might have path. 
+
+    // Check if it's a batch upload of loose files ( > 1)
+    if (files.length > 1) {
+      // Check if likely a folder upload (webkitRelativePath present and has slashes)
+      // Actually browser flattens folder structure into FileList.
+      // The user request: "Ask user: individual or create folder?"
+      const confirmGroup = confirm(`선택된 ${files.length}개의 파일을 위해 새 폴더를 만드시겠습니까?\n\n[확인] = 새 폴더에 묶어서 업로드\n[취소] = 현재 위치에 개별 업로드`);
+
+      if (confirmGroup) {
+        const folderName = prompt("새 폴더 이름을 입력하세요:", "새 폴더");
+        if (folderName) {
+          await handleBatchUpload(files, folderName);
+          return;
+        }
+      }
+    }
+
+    // Fallback: Individual upload (or cancelled folder creation -> individual)
+    await handleBatchUpload(files);
+  };
+
+  // Handlers for inputs
+  const folderInputRef = useRef<HTMLInputElement>(null);
+
+  // Delete Handler
   const handleDelete = async (id: string, type: 'file' | 'folder') => {
     if (!confirm(`정말 이 ${type === 'file' ? '파일' : '폴더'}을 삭제하시겠습니까?`)) return;
     try {
@@ -230,7 +287,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
     }
   };
 
-  // Context Actions
+  // Context Actions follow ...
   const handleShare = (record: FileRecord) => { setShareFile(record); setIsShareOpen(true); };
   const handleMove = (record: FileRecord) => { setMoveFile(record); setIsMoveOpen(true); };
   const handleRename = (record: FileRecord) => { setRenameFile(record); setIsRenameOpen(true); };
@@ -239,13 +296,12 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
     setSelectedFile(record);
     setIsDetailOpen(true);
   };
-
   const handleDownload = (file: FileRecord) => {
     if (!file.file[0]) return;
-    const url = `/api/proxy/file/${file.collectionId}/${file.id}/${file.file[0]}`;
+    const url = `/api/proxy/file/${file.collectionId}/${file.id}/${file.file[0]}?filename=${encodeURIComponent(file.name || file.file[0].replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1'))}`;
     const link = document.createElement('a');
     link.href = url;
-    link.download = (file.name || file.file[0]).replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1');
+    link.download = file.name || file.file[0].replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -254,7 +310,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
   // Drag & Drop Handlers
   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragOver(true); };
   const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); setIsDragOver(false); };
-  const handleDrop = (e: React.DragEvent) => { e.preventDefault(); handleUpload(e.dataTransfer.files); };
+  const handleDrop = (e: React.DragEvent) => { e.preventDefault(); handleUploadProcess(e.dataTransfer.files); };
 
   return (
     <div
@@ -362,10 +418,10 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
             </button>
 
             <div className="flex bg-slate-200/50 rounded-lg p-0.5 shrink-0">
-              <button onClick={() => setViewMode('grid')} className={cn("p-2 rounded-md transition-all", viewMode === 'grid' ? "bg-white shadow-sm text-indigo-600" : "text-slate-500")}>
+              <button onClick={() => setViewMode('grid')} className={cn("p-2 rounded-md transition-all", viewMode === 'grid' ? "bg-white shadow-sm text-indigo-600" : "text-slate-500")} aria-label="Grid view">
                 <Grid className="w-4 h-4" />
               </button>
-              <button onClick={() => setViewMode('list')} className={cn("p-2 rounded-md transition-all", viewMode === 'list' ? "bg-white shadow-sm text-indigo-600" : "text-slate-500")}>
+              <button onClick={() => setViewMode('list')} className={cn("p-2 rounded-md transition-all", viewMode === 'list' ? "bg-white shadow-sm text-indigo-600" : "text-slate-500")} aria-label="List view">
                 <ListIcon className="w-4 h-4" />
               </button>
             </div>
@@ -373,7 +429,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
             <label className="cursor-pointer bg-slate-900 hover:bg-black text-white px-4 py-2.5 rounded-xl font-bold custom-shadow flex items-center gap-2 transition-transform active:scale-95 shadow-lg shadow-slate-900/20 sm:text-sm text-xs whitespace-nowrap ml-2">
               {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
               <span>업로드</span>
-              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleUpload} disabled={uploading} />
+              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleUploadInput} disabled={uploading} />
             </label>
           </div>
         </div>
@@ -411,7 +467,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
             <FolderOpen className="w-16 h-16 opacity-20" />
             <p>이 폴더는 비어있습니다</p>
           </div>
-        ) : (
+        ) : (<>
           <div className={cn(
             "grid gap-4 pb-20",
             viewMode === 'grid' ? "grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5" : "grid-cols-1"
@@ -438,6 +494,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
                   viewMode={viewMode}
                   onClick={() => handleEnterFolder(folder)}
                   onDelete={() => handleDelete(folder.id, 'folder')}
+                  onRename={() => handleRename(folder as unknown as FileRecord)}
                 />
               ))}
             </AnimatePresence>
@@ -457,7 +514,27 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
               ))}
             </AnimatePresence>
           </div>
-        )}
+
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 mt-6 py-4 border-t border-slate-100">
+              <button
+                onClick={() => setPage(Math.max(1, page - 1))}
+                disabled={page === 1}
+                className="px-4 py-2 bg-white border border-slate-200 rounded-xl disabled:opacity-50 hover:bg-slate-50 text-sm font-medium transition-colors"
+              >
+                이전
+              </button>
+              <span className="text-sm font-bold text-slate-600 px-2">{page} / {totalPages}</span>
+              <button
+                onClick={() => setPage(Math.min(totalPages, page + 1))}
+                disabled={page === totalPages}
+                className="px-4 py-2 bg-white border border-slate-200 rounded-xl disabled:opacity-50 hover:bg-slate-50 text-sm font-medium transition-colors"
+              >
+                다음
+              </button>
+            </div>
+          )}
+        </>)}
       </div>
 
       {/* Modals */}
@@ -508,40 +585,70 @@ function TabButton({ children, active, onClick }: { children: React.ReactNode, a
   )
 }
 
-function FolderCard({ folder, viewMode, onClick, onDelete }: { folder: FolderRecord, viewMode: 'grid' | 'list', onClick: () => void, onDelete: () => void }) {
+function FolderCard({ folder, viewMode, onClick, onDelete, onRename }: { folder: FolderRecord, viewMode: 'grid' | 'list', onClick: () => void, onDelete: () => void, onRename: () => void }) {
   return (
-    <div onClick={onClick} className={cn("group relative bg-amber-50/50 border border-amber-100 rounded-2xl overflow-hidden hover:shadow-lg hover:border-amber-300 hover:bg-amber-50 transition-all cursor-pointer select-none", viewMode === 'list' ? "flex items-center p-3 gap-4 h-16" : "flex flex-col aspect-[4/5]")}>
+    <div onClick={onClick} className={cn("group relative bg-amber-50/50 border border-amber-100 rounded-2xl hover:shadow-lg hover:border-amber-300 hover:bg-amber-50 transition-all cursor-pointer select-none z-0 hover:z-10", viewMode === 'list' ? "flex items-center p-3 gap-4 h-16" : "flex flex-col aspect-[4/5]")}>
       <div className={cn("flex items-center justify-center text-amber-400 transition-transform group-hover:scale-110", viewMode === 'list' ? "w-10" : "flex-1")}>
         <FolderIcon className={cn("fill-current", viewMode === 'list' ? "w-8 h-8" : "w-16 h-16")} />
       </div>
       <div className={cn("p-3", viewMode === 'list' && "flex-1 flex justify-between items-center")}>
-        <div className="min-w-0 text-center md:text-left">
+        <div className="min-w-0 md:text-left">
           <h3 className="font-bold text-slate-700 text-sm truncate">{folder.name}</h3>
           {viewMode === 'grid' && <p className="text-[10px] text-slate-400 mt-0.5">{new Date(folder.created).toLocaleDateString()}</p>}
         </div>
-        <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100">
-          <Trash2 className="w-4 h-4" />
-        </button>
+
+        {/* Folder Context Menu */}
+        <div onClick={(e) => e.stopPropagation()} className={cn("flex items-center gap-1", viewMode === 'grid' ? "mt-2 justify-end" : "")}>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="p-1 opacity-0 group-hover:opacity-100 hover:bg-amber-100 rounded-lg text-amber-500/70 hover:text-amber-600 transition-all" aria-label="Folder options">
+                <MoreVertical className="w-4 h-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" sideOffset={5}>
+              <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); onRename(); }}>
+                <Edit2 className="w-4 h-4 mr-2" /> 이름 변경
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); onDelete(); }} className="text-red-500 hover:text-red-600">
+                <Trash2 className="w-4 h-4 mr-2" /> 삭제
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
     </div>
   )
 }
 
 function FileCard({ file, viewMode, onDelete, onShare, onMove, onRename, onClick }: { file: FileRecord, viewMode: 'grid' | 'list', onDelete: () => void, onShare: () => void, onMove: () => void, onRename: () => void, onClick: () => void }) {
-  const fileUrl = file.file && file.file.length > 0 ? `/api/proxy/file/${file.collectionId}/${file.id}/${file.file[0]}` : null;
+  // Use lazy loading and thumbnail size for grid view optimization
+  // PocketBase supports ?thumb=100x100 etc. passed to proxy
+  // Proxy passes all params to PB.
+  // We use 300x300 for grid cards (actually 400x500 to be safe for retina)
+  const fileUrl = file.file && file.file.length > 0 ? `/api/proxy/file/${file.collectionId}/${file.id}/${file.file[0]}?thumb=400x500` : null;
   const isImage = file.file && file.file[0]?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
   const displayName = file.name || file.file?.[0]?.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1') || "Untitled";
 
   return (
-    <div className={cn("group relative bg-white border border-slate-100 rounded-2xl overflow-hidden hover:shadow-xl hover:border-indigo-100 transition-all cursor-pointer", viewMode === 'list' ? "flex items-center p-3 gap-4" : "flex flex-col aspect-[4/5]")} onClick={onClick}>
-      <div className={cn("bg-slate-50 flex items-center justify-center overflow-hidden relative", viewMode === 'list' ? "w-12 h-12 rounded-lg" : "flex-1")}>
-        {isImage && fileUrl ? <img src={fileUrl} alt="preview" className="w-full h-full object-cover" /> : <FileIcon className="text-indigo-300 w-1/3 h-1/3" />}
+    <div className={cn("group relative bg-white border border-slate-100 rounded-2xl hover:shadow-xl hover:border-indigo-100 transition-all cursor-pointer z-0 hover:z-10", viewMode === 'list' ? "flex items-center p-3 gap-4" : "flex flex-col aspect-[4/5]")} onClick={onClick}>
+      <div className={cn("bg-slate-50 flex items-center justify-center overflow-hidden relative", viewMode === 'list' ? "w-12 h-12 rounded-lg" : "flex-1 rounded-t-2xl")}>
+        {isImage && fileUrl ? (
+          <img
+            src={fileUrl}
+            alt="preview"
+            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+            loading="lazy"
+          />
+        ) : (
+          <FileIcon className="text-indigo-300 w-1/3 h-1/3" />
+        )}
         {viewMode === 'grid' && (
           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-            <button onClick={(e) => { e.stopPropagation(); window.open(fileUrl!, '_blank') }} className="p-2 bg-white/20 hover:bg-white rounded-full text-white hover:text-indigo-600 backdrop-blur-md" aria-label="Open">
+            <button onClick={(e) => { e.stopPropagation(); window.open(fileUrl?.split('?')[0], '_blank') }} className="p-2 bg-white/20 hover:bg-white rounded-full text-white hover:text-indigo-600 backdrop-blur-md" aria-label="Open">
               <Search className="w-4 h-4" />
             </button>
-            {/* Added More Options Button */}
+            {/* Added More Options Button in hover overlay if needed, but context menu is better */}
           </div>
         )}
       </div>
@@ -554,22 +661,22 @@ function FileCard({ file, viewMode, onDelete, onShare, onMove, onRename, onClick
           {/* Context Menu Hook */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button onClick={(e) => e.stopPropagation()} className="p-1 hover:bg-slate-100 rounded-lg text-slate-400">
+              <button className="p-1 hover:bg-slate-100 rounded-lg text-slate-400" aria-label="File options">
                 <MoreVertical className="w-4 h-4" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onShare(); }}>
+            <DropdownMenuContent align="end" sideOffset={5}>
+              <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); onShare(); }}>
                 <Share2 className="w-4 h-4 mr-2" /> 공유
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onRename(); }}>
+              <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); onRename(); }}>
                 <Edit2 className="w-4 h-4 mr-2" /> 이름 변경
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onMove(); }}>
+              <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); onMove(); }}>
                 <FolderInput className="w-4 h-4 mr-2" /> 이동
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onDelete(); }} className="text-red-500 hover:text-red-600">
+              <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); onDelete(); }} className="text-red-500 hover:text-red-600">
                 <Trash2 className="w-4 h-4 mr-2" /> 삭제
               </DropdownMenuItem>
             </DropdownMenuContent>

@@ -32,22 +32,41 @@ export const DropdownMenuTrigger = ({ children, asChild }: { children: React.Rea
   const ctx = React.useContext(DropdownMenuContext);
   if (!ctx) throw new Error("DropdownMenuTrigger must be used within DropdownMenu");
 
-  // If asChild is true, we should strictly cloneElement but for simplicity we wrap in div or just pass onClick
-  // The usage in DriveInterface uses <button> child.
-  // We wrap in a generic div acting as trigger wrapper to catch click.
+  const toggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    ctx.setOpen(!ctx.open);
+  };
+
+  if (asChild && React.isValidElement(children)) {
+    return React.cloneElement(children as React.ReactElement<any>, {
+      onClick: (e: React.MouseEvent) => {
+        // @ts-ignore
+        children.props.onClick?.(e);
+        toggle(e);
+      }
+    });
+  }
+
   return (
-    <div onClick={(e) => { e.stopPropagation(); ctx.setOpen(!ctx.open); }} className="cursor-pointer">
+    <div onClick={toggle} className="cursor-pointer">
       {children}
     </div>
   );
 };
 
-export const DropdownMenuContent = ({ children, className }: { children: React.ReactNode; className?: string }) => {
+export const DropdownMenuContent = ({ children, className, align = "end", sideOffset = 4 }: { children: React.ReactNode; className?: string; align?: 'start' | 'center' | 'end'; sideOffset?: number }) => {
   const ctx = React.useContext(DropdownMenuContext);
   if (!ctx || !ctx.open) return null;
 
   return (
-    <div className={cn("absolute right-0 mt-2 w-48 origin-top-right rounded-xl bg-white shadow-xl ring-1 ring-black/5 focus:outline-none z-50 animate-in fade-in zoom-in-95 duration-100 border border-slate-100", className)}>
+    <div
+      style={{ marginTop: sideOffset }}
+      className={cn(
+        "absolute w-48 rounded-xl bg-white shadow-xl ring-1 ring-black/5 focus:outline-none z-50 animate-in fade-in zoom-in-95 duration-100 border border-slate-100",
+        align === 'end' ? "right-0 origin-top-right" : align === 'start' ? "left-0 origin-top-left" : "left-1/2 -translate-x-1/2 origin-top",
+        className
+      )}
+    >
       <div className="py-1">{children}</div>
     </div>
   );

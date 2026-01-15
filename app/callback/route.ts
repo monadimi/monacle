@@ -103,6 +103,12 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    if (!userData.email?.endsWith("@monad.io.kr")) {
+      return NextResponse.redirect(
+        new URL("/?error=unauthorized_domain", req.url)
+      );
+    }
+
     // 5. Store Session
     // We store the access_token so the client can use it for PocketBase requests.
     const sessionData = {

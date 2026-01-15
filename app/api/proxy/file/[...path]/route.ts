@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import PocketBase from "pocketbase";
+import PocketBase, { RecordModel } from "pocketbase";
 import { cookies } from "next/headers";
 
 export async function GET(
@@ -49,7 +49,7 @@ export async function GET(
           .collection("users")
           .getFirstListItem('email="cloud-team@monad.io.kr"');
         teamId = teamUser.id;
-      } catch (e) {
+      } catch {
         /* ignore */
       }
 
@@ -63,7 +63,7 @@ export async function GET(
         // For now, simple strict check.
         return new NextResponse("Forbidden", { status: 403 });
       }
-    } catch (e) {
+    } catch {
       return new NextResponse("Not Found", { status: 404 });
     }
 
@@ -73,8 +73,8 @@ export async function GET(
     // but requires token if private.
     // Since we are proxying, we can use the fetch method with the admin token header.
 
-    const fileUrl = pb.files.getUrl(
-      { collectionId, id: recordId } as any,
+    const fileUrl = pb.files.getURL(
+      { collectionId, id: recordId } as unknown as RecordModel,
       filename
     );
 
@@ -92,20 +92,48 @@ export async function GET(
     }
 
     // Verify content type
-    const contentType =
+    let contentType =
       response.headers.get("content-type") || "application/octet-stream";
-    const cleanName = filename.replace(/_[a-z0-9]+\.([^.]+)$/i, ".$1");
 
-    return new NextResponse(response.body as any, {
+    // Allow overriding filename via query param (for preserving Korean names)
+    const queryFilename = request.nextUrl.searchParams.get("filename");
+    const cleanName =
+      queryFilename || filename.replace(/_[a-z0-9]+\.([^.]+)$/i, ".$1");
+    // Also use the extension from the display name if acceptable, or fallback to file extension
+    const ext = cleanName.split(".").pop()?.toLowerCase();
+
+    // Force correct content type for known extensions if generic
+    if (contentType === "application/octet-stream" || !contentType) {
+      if (ext === "pdf") contentType = "application/pdf";
+      else if (["jpg", "jpeg", "png", "gif", "webp", "svg"].includes(ext || ""))
+        contentType = `image/${ext === "svg" ? "svg+xml" : ext}`;
+      else if (["mp4", "webm", "mov"].includes(ext || ""))
+        contentType = `video/${ext === "mov" ? "quicktime" : ext}`;
+      else if (["txt", "md", "html", "css", "js", "json"].includes(ext || ""))
+        contentType = "text/plain";
+    }
+
+    // Determine disposition based on type
+    const isPreviewable =
+      contentType.startsWith("image/") ||
+      contentType.startsWith("video/") ||
+      contentType === "application/pdf" ||
+      contentType.startsWith("text/");
+    const dispositionType = isPreviewable ? "inline" : "attachment";
+    const encodedName = encodeURIComponent(cleanName);
+
+    return new NextResponse(response.body, {
       headers: {
         "Content-Type": contentType,
-        "Cache-Control": "public, max-age=3600",
-        "Content-Disposition": `attachment; filename="${encodeURIComponent(
-          cleanName
-        )}"`,
+        "Cache-Control":
+          "no-store, no-cache, must-revalidate, proxy-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+        // Use filename* for proper UTF-8 handling
+        "Content-Disposition": `${dispositionType}; filename="${encodedName}"; filename*=UTF-8''${encodedName}`,
       },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Proxy Error:", error);
     return new NextResponse("Internal Server Error", { status: 500 });
   }
