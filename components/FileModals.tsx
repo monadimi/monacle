@@ -13,7 +13,7 @@ import { updateFileShare, updateFile, listFiles, updateFolder } from "@/app/acti
 type FileRecord = {
   id: string;
   collectionId: string;
-  file: string[];
+  file: string[] | string;
   owner: string;
   share_type: 'none' | 'view' | 'edit';
   is_shared: boolean;
@@ -59,11 +59,13 @@ export function FileDetailModal({
   // Use file.created/updated as stable cache key
   const timestamp = file && 'updated' in file ? new Date(file.updated).getTime() : 0;
 
-  const fileUrl = (file as FileRecord)?.file && (file as FileRecord).file.length > 0
-    ? `/api/proxy/file/${file?.collectionId}/${file?.id}/${(file as FileRecord).file[0]}?t=${timestamp}`
+  const rawFile = file && 'file' in file ? (Array.isArray(file.file) ? file.file[0] : file.file) : null;
+
+  const fileUrl = rawFile
+    ? `/api/proxy/file/${file?.collectionId}/${file?.id}/${rawFile}?v=${timestamp}`
     : null;
 
-  const ext = file?.file?.[0]?.split('.').pop()?.toLowerCase();
+  const ext = rawFile?.split('.').pop()?.toLowerCase();
   const isImage = ext?.match(/^(jpg|jpeg|png|gif|webp|svg)$/);
 
   const isVideo = ext?.match(/^(mp4|webm|ogg|mov)$/);
@@ -126,8 +128,8 @@ export function FileDetailModal({
               {ext || "?"}
             </div>
             <div className="min-w-0">
-              <h2 className="font-bold text-slate-800 truncate max-w-md" title={file.name || file.file?.[0]}>
-                {file.name || file.file?.[0]}
+              <h2 className="font-bold text-slate-800 truncate max-w-md" title={file.name || rawFile || ""}>
+                {file.name || rawFile}
               </h2>
               <div className="flex items-center gap-2 text-xs text-slate-500">
                 <span>{new Date(file.created).toLocaleDateString()}</span>
@@ -180,7 +182,8 @@ export function RenameModal({
       } else {
         // File logic
         const f = file as FileRecord;
-        const initialName = f.name || (f.file?.[0] ? f.file[0].replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1') : "");
+        const rawF = Array.isArray(f.file) ? f.file[0] : f.file;
+        const initialName = f.name || (rawF ? rawF.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1') : "");
         setName(initialName);
       }
     }
@@ -526,7 +529,7 @@ export function ShareModal({
           <DialogTitle className="text-xl font-bold flex items-center gap-2 min-w-0">
             <Share2 className="w-5 h-5 text-indigo-600 shrink-0" />
             <span className="truncate">
-              &quot;{file.name || file.file?.[0]?.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1')}&quot; 공유
+              &quot;{file.name || (Array.isArray(file.file) ? file.file[0] : file.file)?.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1')}&quot; 공유
             </span>
           </DialogTitle>
         </DialogHeader>

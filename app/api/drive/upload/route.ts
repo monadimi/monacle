@@ -3,6 +3,8 @@ import { cookies } from "next/headers";
 import { getAdminClient, getTeamUserId, setCachedTeamId } from "@/lib/admin";
 import PocketBase from "pocketbase";
 
+export const maxDuration = 300; // 5 minutes for large chunk handling
+
 // Helper duplicated from actions/cloud.ts to ensure independence
 async function getOrCreateTeamUser(pb: PocketBase) {
   const cached = await getTeamUserId(pb);
@@ -92,10 +94,51 @@ export async function POST(request: NextRequest) {
     // Cleanup extra fields if necessary or just pass through
     formData.delete("isTeam");
 
-    // Upload to PocketBase
+    // Check for recordId to support Chunked Uploads (Append)
+    const recordId = formData.get("recordId") as string | null;
+    let record;
+
     const version = await incrementVersion(pb);
     formData.append("tVersion", version.toString());
-    const record = await pb.collection("cloud").create(formData);
+
+    if (recordId) {
+      // Append mode
+      // Security Check: Verify ownership
+      const existing = await pb.collection("cloud").getOne(recordId);
+      if (existing.owner !== ownerId) {
+        console.error(
+          `[Upload] Forbidden: User ${ownerId} tried to update record owned by ${existing.owner}`
+        );
+        return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      }
+
+      formData.delete("recordId"); // Cleanup
+      const existingFiles = existing.file;
+
+      console.log(
+        `[Upload] Appending to record ${recordId}. Current files:`,
+        existingFiles
+      );
+
+      if (existingFiles) {
+        if (Array.isArray(existingFiles)) {
+          existingFiles.forEach((f: string) => {
+            formData.append("file", f);
+          });
+        } else if (typeof existingFiles === "string") {
+          formData.append("file", existingFiles);
+        }
+      }
+
+      // New chunk is already in formData as 'file' (Blob)
+      record = await pb.collection("cloud").update(recordId, formData);
+      console.log(`[Upload] Update complete. Files now:`, record.file);
+    } else {
+      // NEW RECORD: Default sharing to off
+      formData.set("share_type", "none");
+      formData.set("is_shared", "false");
+      record = await pb.collection("cloud").create(formData);
+    }
 
     return NextResponse.json({ success: true, record });
   } catch (error: any) {

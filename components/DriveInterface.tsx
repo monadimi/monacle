@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "./ui/dropdown-menu";
 
 import { localDrive } from "@/lib/local-drive";
-import { getDeltaUpdates } from "@/app/actions/sync";
+import { getDeltaUpdates, getSchemaVersion } from "@/app/actions/sync";
 
 // ... Types (FileRecord, FolderRecord) can be imported or redefined. Keeping inline for single file edit simplicity if not shared.
 // Ideally share types. For now redefining locally to match FileModals.
@@ -24,7 +24,7 @@ type FileRecord = {
   id: string;
   collectionId: string;
   collectionName: string;
-  file: string[];
+  file: string[] | string; // Can be string (single) or array (multiple/chunked)
   owner: string;
   share_type: 'none' | 'view' | 'edit';
   created: string;
@@ -203,7 +203,18 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
       // setLoading(true); 
 
       const localVer = await localDrive.getSyncVersion();
+      const localSchemaVer = await localDrive.getSchemaVersion();
       const filterMode = tab === 'team' ? 'team' : 'personal';
+
+      // 1. Check Schema Version
+      const schemaRes = await getSchemaVersion();
+      if (schemaRes.success && schemaRes.version !== localSchemaVer) {
+        console.log(`Schema version mismatch (Local: ${localSchemaVer}, Server: ${schemaRes.version}). Resetting...`);
+        await localDrive.clearAll();
+        await localDrive.setSchemaVersion(schemaRes.version);
+        // Recurse to start sync from version 0
+        return syncFiles(retryCount + 1);
+      }
 
       const { success, hasUpdates, version, changes, error, resetRequired } = await getDeltaUpdates(localVer, filterMode);
 
@@ -236,6 +247,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
 
           // Refresh View
           loadFromLocal();
+          refreshStorage();
         }
       } else {
         throw new Error(error || "Sync returned unsuccess");
@@ -370,34 +382,53 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
   };
 
   // Handlers
-  // Client-side uploader
-  const uploadFileClient = (formData: FormData, onProgress: (loaded: number) => void) => {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/drive/upload', true);
+  // Client-side uploader with retries
+  const uploadFileClient = async (formData: FormData, onProgress: (loaded: number) => void) => {
+    const MAX_RETRIES = 3;
+    let lastError: any;
 
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          onProgress(e.loaded);
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', '/api/drive/upload', true);
+
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              onProgress(e.loaded);
+            }
+          };
+
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve(JSON.parse(xhr.responseText));
+            } else {
+              try {
+                const res = JSON.parse(xhr.responseText);
+                reject({ status: xhr.status, message: res.error || xhr.statusText });
+              } catch {
+                reject({ status: xhr.status, message: xhr.statusText || 'Upload failed' });
+              }
+            }
+          };
+
+          xhr.onerror = () => reject({ status: 0, message: 'Network error' });
+          xhr.send(formData);
+        });
+      } catch (err: any) {
+        lastError = err;
+        // Retry only on specific server/gateway errors (0 is network error, 502, 503, 504 are temporary)
+        const shouldRetry = err.status === 0 || err.status === 502 || err.status === 503 || err.status === 504;
+
+        if (shouldRetry && attempt < MAX_RETRIES) {
+          const delay = attempt * 2000; // 2s, 4s... backoff
+          console.warn(`Upload attempt ${attempt} failed (${err.message}). Retrying in ${delay / 1000}s...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
         }
-      };
-
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(JSON.parse(xhr.responseText));
-        } else {
-          try {
-            const res = JSON.parse(xhr.responseText);
-            reject(new Error(res.error || xhr.statusText));
-          } catch {
-            reject(new Error(xhr.statusText || 'Upload failed'));
-          }
-        }
-      };
-
-      xhr.onerror = () => reject(new Error('Network error'));
-      xhr.send(formData);
-    });
+        throw new Error(err.message || "Upload failed after retries");
+      }
+    }
   };
 
   const handleBatchUpload = async (fileList: FileList, folderName?: string) => {
@@ -433,22 +464,67 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
       let uploadedTotalGlobal = 0;
 
       // Sequential upload to track accurate total progress
+      // CHUNK SIZE: 50MB (Safe for 100MB Cloudflare limit)
+      const CHUNK_SIZE = 50 * 1024 * 1024;
+
       for (let i = 0; i < fileList.length; i++) {
         const file = fileList[i];
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('isTeam', tab === 'team' ? 'true' : 'false');
-        if (targetFolderId !== "root") formData.append('folder', targetFolderId);
-        if (targetFolderId !== "root") formData.append('folder', targetFolderId);
-        formData.append('name', file.name); // explicitly adding name
 
-        await uploadFileClient(formData, (loaded) => {
-          // loaded is for *this file*
-          const currentTotal = uploadedTotalGlobal + loaded;
-          setUploadProgress(prev => prev ? { ...prev, loaded: currentTotal } : null);
-        });
+        // Check if splitting is needed
+        if (file.size > CHUNK_SIZE) {
+          // Split Upload
+          const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+          let recordId: string | null = null;
 
-        uploadedTotalGlobal += file.size;
+          for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+            const start = chunkIdx * CHUNK_SIZE;
+            const end = Math.min(file.size, start + CHUNK_SIZE);
+            const chunkBlob = file.slice(start, end);
+            const chunkName = `${file.name}.part${(chunkIdx + 1).toString().padStart(3, '0')}`;
+
+            const formData = new FormData();
+            formData.append('file', chunkBlob, chunkName);
+            formData.append('isTeam', tab === 'team' ? 'true' : 'false');
+            if (targetFolderId !== "root") formData.append('folder', targetFolderId);
+            // Also pass original name logic if needed? 
+            // But simplified: First chunk creates record with Name. Subsequent updates it? 
+            // PB doesn't let us easily rename the "record" name via API upload unless we pass 'name' field.
+            // Pass 'name' field only on first chunk?
+            if (chunkIdx === 0) {
+              formData.append('name', file.name);
+              formData.append('size', file.size.toString());
+            } else if (recordId) {
+              formData.append('recordId', recordId);
+            }
+
+            const result: any = await uploadFileClient(formData, (loaded) => {
+              // Progress for this chunk
+              // Global loaded = uploadedTotalGlobal + start + loaded
+              const currentTotal = uploadedTotalGlobal + start + loaded;
+              setUploadProgress(prev => prev ? { ...prev, loaded: currentTotal } : null);
+            });
+
+            if (chunkIdx === 0) {
+              recordId = result.record.id;
+            }
+          }
+          uploadedTotalGlobal += file.size;
+        } else {
+          // Standard Single Upload
+          const formData = new FormData();
+          formData.append('file', file);
+          formData.append('isTeam', tab === 'team' ? 'true' : 'false');
+          if (targetFolderId !== "root") formData.append('folder', targetFolderId);
+          formData.append('name', file.name);
+          formData.append('size', file.size.toString());
+
+          await uploadFileClient(formData, (loaded) => {
+            const currentTotal = uploadedTotalGlobal + loaded;
+            setUploadProgress(prev => prev ? { ...prev, loaded: currentTotal } : null);
+          });
+          uploadedTotalGlobal += file.size;
+        }
+
         setUploadProgress(prev => prev ? { ...prev, count: i + 1, loaded: uploadedTotalGlobal } : null);
       }
 
@@ -522,11 +598,14 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
     setIsDetailOpen(true);
   };
   const handleDownload = (file: FileRecord) => {
-    if (!file.file[0]) return;
-    const url = `/api/proxy/file/${file.collectionId}/${file.id}/${file.file[0]}?filename=${encodeURIComponent(file.name || file.file[0].replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1'))}`;
+    let rawFile = file.file;
+    if (Array.isArray(rawFile)) rawFile = rawFile[0];
+    if (!rawFile) return;
+
+    const url = `/api/proxy/file/${file.collectionId}/${file.id}/${rawFile}?filename=${encodeURIComponent(file.name || rawFile.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1'))}`;
     const link = document.createElement('a');
     link.href = url;
-    link.download = file.name || file.file[0].replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1');
+    link.download = file.name || rawFile.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -942,9 +1021,13 @@ function FileCard({ file, viewMode, onDelete, onShare, onMove, onRename, onClick
   // PocketBase supports ?thumb=100x100 etc. passed to proxy
   // Proxy passes all params to PB.
   // We use 300x300 for grid cards (actually 400x500 to be safe for retina)
-  const fileUrl = file.file && file.file.length > 0 ? `/api/proxy/file/${file.collectionId}/${file.id}/${file.file[0]}?thumb=400x500` : null;
-  const isImage = file.file && file.file[0]?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
-  const displayName = file.name || file.file?.[0]?.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1') || "Untitled";
+
+  const rawFile = Array.isArray(file.file) ? file.file[0] : file.file;
+
+  const timestamp = new Date(file.updated).getTime();
+  const fileUrl = rawFile ? `/api/proxy/file/${file.collectionId}/${file.id}/${rawFile}?thumb=400x500&v=${timestamp}` : null;
+  const isImage = rawFile?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
+  const displayName = file.name || rawFile?.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1') || "Untitled";
 
   return (
     <div className={cn("group relative bg-white border border-slate-100 rounded-2xl hover:shadow-xl hover:border-indigo-100 transition-all cursor-pointer z-0 hover:z-10", viewMode === 'list' ? "flex items-center p-3 gap-4" : "flex flex-col aspect-[4/5]")} onClick={onClick}>
@@ -961,7 +1044,7 @@ function FileCard({ file, viewMode, onDelete, onShare, onMove, onRename, onClick
         )}
         {viewMode === 'grid' && (
           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-            <button onClick={(e) => { e.stopPropagation(); window.open(fileUrl?.split('?')[0], '_blank') }} className="p-2 bg-white/20 hover:bg-white rounded-full text-white hover:text-indigo-600 backdrop-blur-md" aria-label="Open">
+            <button onClick={(e) => { e.stopPropagation(); if (fileUrl) window.open(fileUrl.split('?')[0], '_blank') }} className="p-2 bg-white/20 hover:bg-white rounded-full text-white hover:text-indigo-600 backdrop-blur-md" aria-label="Open">
               <Search className="w-4 h-4" />
             </button>
             {/* Added More Options Button in hover overlay if needed, but context menu is better */}
@@ -970,7 +1053,7 @@ function FileCard({ file, viewMode, onDelete, onShare, onMove, onRename, onClick
       </div>
       <div className={cn("p-3", viewMode === 'list' && "flex-1 flex justify-between items-center")}>
         <div className="min-w-0">
-          <h3 className="font-semibold text-slate-700 text-sm truncate" title={file.file?.[0]}>{displayName}</h3>
+          <h3 className="font-semibold text-slate-700 text-sm truncate" title={rawFile || ""}>{displayName}</h3>
           <p className="text-xs text-slate-400 mt-1">{new Date(file.created).toLocaleDateString()}</p>
         </div>
         <div className={cn("flex items-center gap-1", viewMode === 'grid' ? "mt-2 justify-end" : "")}>

@@ -147,6 +147,8 @@ export async function uploadFile(formData: FormData) {
       name: file.name, // Use original filename
       owner: owner,
       folder: folderId || "",
+      is_shared: false,
+      share_type: "none",
       tVersion: version,
     };
 

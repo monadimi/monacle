@@ -65,6 +65,17 @@ export class LocalDrive {
     await db.put("meta", version, "lastSyncVersion");
   }
 
+  async getSchemaVersion(): Promise<number> {
+    const db = await this.dbPromise;
+    const val = await db.get("meta", "schemaVersion");
+    return (val as number) || 0;
+  }
+
+  async setSchemaVersion(version: number) {
+    const db = await this.dbPromise;
+    await db.put("meta", version, "schemaVersion");
+  }
+
   async saveFiles(files: any[]) {
     if (!files.length) return;
     const db = await this.dbPromise;

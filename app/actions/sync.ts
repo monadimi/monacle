@@ -136,3 +136,43 @@ export async function getDeltaUpdates(
     return { success: false, error: (error as Error).message };
   }
 }
+
+export async function getSchemaVersion() {
+  const MAX_RETRIES = 3;
+  let lastError: any;
+
+  for (let i = 0; i < MAX_RETRIES; i++) {
+    try {
+      const pb = await getAdminClient();
+      // Record ID provided by user: dnp7sf942vkqpnv
+      const record = await pb
+        .collection("schema_version")
+        .getOne("dnp7sf942vkqpnv");
+      return { success: true, version: record.version || 0 };
+    } catch (error: any) {
+      lastError = error;
+      console.error(`getSchemaVersion Effort ${i + 1} failed:`, error.message);
+      // Only retry on potential gateway/network issues (502, 503, 504)
+      if (
+        error.status !== 502 &&
+        error.status !== 503 &&
+        error.status !== 504
+      ) {
+        break;
+      }
+      // Wait a bit before retry
+      if (i < MAX_RETRIES - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1)));
+      }
+    }
+  }
+
+  console.error(
+    "Schema Version Fetch definitively failed after retries. Using silent fallback."
+  );
+  return {
+    success: false,
+    error: lastError?.message || "Connection failed",
+    version: 0,
+  };
+}

@@ -103,6 +103,7 @@ export default function FormViewer({ formId, initialData }: { formId: string, in
   // Data State
   const [answers, setAnswers] = useState<Record<string, unknown>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorState, setErrorState] = useState(false); // New state for validation feedback
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
 
   // Fetch Form Data if not provided
@@ -152,6 +153,7 @@ export default function FormViewer({ formId, initialData }: { formId: string, in
         const isEmpty = val === undefined || val === "" || (Array.isArray(val) && val.length === 0);
 
         if (q.required && isEmpty) {
+          setErrorState(true);
           const qContainer = document.getElementById('question-container');
           if (qContainer) {
             qContainer.animate([
@@ -163,6 +165,8 @@ export default function FormViewer({ formId, initialData }: { formId: string, in
               { transform: 'translateX(0)' }
             ], { duration: 300 });
           }
+          // Auto-reset error state
+          setTimeout(() => setErrorState(false), 2000);
           return;
         }
       }
@@ -463,8 +467,20 @@ export default function FormViewer({ formId, initialData }: { formId: string, in
                 )}
               </div>
 
-              {/* Navigation Buttons */}
-              <div className="flex items-center gap-4 mt-8 pt-8 border-t border-slate-100">
+              <AnimatePresence>
+                {errorState && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 10 }}
+                    className="text-red-500 text-sm font-bold flex items-center gap-2"
+                  >
+                    <Info className="w-4 h-4" /> 필수 문항입니다. 답변을 입력해주세요.
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <div className="flex items-center gap-4 mt-8 pt-8 border-t border-slate-100 w-full">
                 <button
                   onClick={handleNext}
                   className="px-8 py-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold flex items-center gap-2 transition-colors shadow-lg shadow-slate-200 hover:shadow-slate-300"
