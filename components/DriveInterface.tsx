@@ -5,12 +5,12 @@ import pb from "@/lib/pocketbase";
 import {
   Search, Upload, File as FileIcon, Trash2,
   Share2, Grid, List as ListIcon,
-  LogOut, User, FolderOpen, Loader2, Folder as FolderIcon, Plus, ChevronRight, Home, ArrowUp, Users, ArrowUpDown, MoreVertical, Edit2, FolderInput
+  User, FolderOpen, Loader2, Folder as FolderIcon, Plus, ChevronRight, Home, ArrowUp, Users, ArrowUpDown, MoreVertical, Edit2, FolderInput, HardDrive
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
-import { uploadFile, listFiles, deleteFile, createFolder, deleteFolder } from "@/app/actions/cloud";
+import { listFiles, deleteFile, createFolder, deleteFolder, getStorageUsage } from "@/app/actions/cloud";
 import { FileDetailModal, ShareModal, MoveModal, RenameModal } from "@/components/FileModals";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "./ui/dropdown-menu";
@@ -55,6 +55,18 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
   const [currentFolder, setCurrentFolder] = useState<FolderRecord | null>(null);
   const [folderPath, setFolderPath] = useState<FolderRecord[]>([]);
 
+  // Storage Usage
+  const [storageUsed, setStorageUsed] = useState(0);
+
+  // Upload Progress State
+  const [uploadProgress, setUploadProgress] = useState<{
+    loaded: number;
+    total: number;
+    startTime: number;
+    count: number;
+    totalCount: number;
+  } | null>(null);
+
   // Initialize PocketBase Auth
   useEffect(() => {
     if (user?.token) {
@@ -94,37 +106,48 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
   const [totalPages, setTotalPages] = useState(1);
   const PER_PAGE = 24; // ~20 items
 
+  const formatBytes = (bytes: number) => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
+
+  const formatDuration = (seconds: number) => {
+    if (!isFinite(seconds) || seconds < 0) return '계산 중...';
+    if (seconds < 60) return `${Math.ceil(seconds)}초`;
+    const mins = Math.floor(seconds / 60);
+    return `${mins}분 ${Math.ceil(seconds % 60)}초`;
+  };
+
+  // Fetch Storage Usage
+  const refreshStorage = useCallback(async () => {
+    const res = await getStorageUsage(tab === 'team');
+    if (res.success) {
+      setStorageUsed(res.totalBytes || 0);
+    }
+  }, [tab]);
+
   // Fetch Files & Folders
   const refreshFiles = useCallback(async (targetPage = page) => {
     setLoading(true);
+    refreshStorage(); // Update storage too
     try {
       const ownerFilter = tab === 'personal'
         ? `owner = "${user.id}"`
         : `owner = "TEAM_MONAD"`;
 
-      let filter = ownerFilter;
-
-      // Category Filter (Applying PB Syntax roughly)
-      if (filterType === 'image') {
-        filter += ` && (file ~ '.jpg' || file ~ '.jpeg' || file ~ '.png' || file ~ '.gif' || file ~ '.webp' || file ~ '.svg')`;
-      } else if (filterType === 'video') {
-        filter += ` && (file ~ '.mp4' || file ~ '.mov' || file ~ '.webm')`;
-      } else if (filterType === 'doc') {
-        filter += ` && (file ~ '.pdf' || file ~ '.doc' || file ~ '.txt' || file ~ '.md' || file ~ '.json')`;
-      }
-
-      // Search is now passed separately to handle sophisticated logic (name + file match) on server
-      // and to filter folders correctly.
-
       const result = await listFiles(targetPage, PER_PAGE, {
         sort: sort,
-        filter: filter,
+        filter: ownerFilter,
         folderId: currentFolder?.id || "root",
-        search: search // Pass search term
+        search: search, // Pass search term
+        type: filterType // Pass filter type (image, video, etc.)
       });
 
       if (result.success) {
-        setFiles(result.items as unknown as FileRecord[]);
+        setFiles(result.files as unknown as FileRecord[]);
         // Only show folders on first page or always? standard is mixed, but listFiles returns separately.
         // Let's show folders only on page 1 to avoid duplication if API is stateless regarding folders
         setFolders(targetPage === 1 ? result.folders as unknown as FolderRecord[] : []);
@@ -138,7 +161,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
     } finally {
       setLoading(false);
     }
-  }, [tab, search, user, currentFolder, sort, filterType, page]);
+  }, [tab, search, user, currentFolder, sort, filterType, page, refreshStorage]);
 
   useEffect(() => {
     refreshFiles(1); // Reset to page 1 on filter change
@@ -178,7 +201,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
     try {
       const result = await createFolder(
         newFolderName,
-        currentFolder?.id || null,
+        currentFolder?.id || undefined,
         tab === 'team' ? "TEAM_MONAD" : undefined
       );
 
@@ -193,9 +216,51 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
   };
 
   // Handlers
+  // Client-side uploader
+  const uploadFileClient = (formData: FormData, onProgress: (loaded: number) => void) => {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/drive/upload', true);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          onProgress(e.loaded);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(JSON.parse(xhr.responseText));
+        } else {
+          try {
+            const res = JSON.parse(xhr.responseText);
+            reject(new Error(res.error || xhr.statusText));
+          } catch {
+            reject(new Error(xhr.statusText || 'Upload failed'));
+          }
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.send(formData);
+    });
+  };
+
   const handleBatchUpload = async (fileList: FileList, folderName?: string) => {
-    setUploading(true);
     setIsDragOver(false);
+    setUploading(true);
+
+    // Calculate total size
+    let totalSize = 0;
+    Array.from(fileList).forEach(f => totalSize += f.size);
+
+    setUploadProgress({
+      loaded: 0,
+      total: totalSize,
+      startTime: Date.now(),
+      count: 0,
+      totalCount: fileList.length
+    });
 
     try {
       let targetFolderId = currentFolder ? currentFolder.id : "root";
@@ -204,39 +269,44 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
       if (folderName) {
         const folderRes = await createFolder(
           folderName,
-          targetFolderId === "root" ? null : targetFolderId,
+          targetFolderId === "root" ? undefined : targetFolderId,
           tab === 'team' ? "TEAM_MONAD" : undefined
         );
         if (!folderRes.success) throw new Error("폴더 생성 실패. 업로드를 중단합니다.");
-        targetFolderId = folderRes.record.id;
+        targetFolderId = folderRes.folder!.id;
       }
 
-      // Upload Files
-      // Note: For large lists, this might be slow. Parallel limit?
-      const promises = Array.from(fileList).map(async (file) => {
+      let uploadedTotalGlobal = 0;
+
+      // Sequential upload to track accurate total progress
+      for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i];
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('owner', tab === 'personal' ? (user.id || user.email) : "TEAM_MONAD");
-        formData.append('is_shared', tab === 'team' ? 'true' : 'false');
-        formData.append('share_type', tab === 'team' ? 'view' : 'none');
+        formData.append('isTeam', tab === 'team' ? 'true' : 'false');
         if (targetFolderId !== "root") formData.append('folder', targetFolderId);
-        formData.append('name', file.name);
-        formData.append('short_id', Math.random().toString(36).substring(7));
-        return uploadFile(formData);
-      });
+        // formData.append('name', file.name); // Optional
 
-      await Promise.all(promises);
+        await uploadFileClient(formData, (loaded) => {
+          // loaded is for *this file*
+          const currentTotal = uploadedTotalGlobal + loaded;
+          setUploadProgress(prev => prev ? { ...prev, loaded: currentTotal } : null);
+        });
 
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      if (folderInputRef.current) folderInputRef.current.value = "";
+        uploadedTotalGlobal += file.size;
+        setUploadProgress(prev => prev ? { ...prev, count: i + 1, loaded: uploadedTotalGlobal } : null);
+      }
 
     } catch (err: unknown) {
       console.error("Upload failed", err);
       // @ts-expect-error - Error type is unknown
       alert(`업로드 실패: ${err.message || "Unknown error"}`);
     } finally {
+      setUploadProgress(null);
       setUploading(false);
       refreshFiles();
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (folderInputRef.current) folderInputRef.current.value = "";
     }
   }
 
@@ -314,7 +384,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
 
   return (
     <div
-      className="flex flex-col h-screen max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 gap-6 relative"
+      className="flex h-screen w-full bg-slate-50 relative"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -334,67 +404,116 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
         )}
       </AnimatePresence>
 
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/30">
-            <FolderOpen className="text-white w-6 h-6" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Monacle 드라이브</h1>
-            <p className="text-slate-500 text-sm font-medium">{user.name}님, 환영합니다</p>
-          </div>
+      {/* Local Sidebar */}
+      <div className="w-64 bg-white border-r border-slate-200 flex flex-col shrink-0 hidden md:flex">
+        <div className="p-6">
+          <h2 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-violet-600 flex items-center gap-2">
+            <HardDrive className="w-6 h-6 text-indigo-600" />
+            Monacle Drive
+          </h2>
         </div>
 
-        <div className="flex items-center gap-3 w-full md:w-auto">
-          <div className="relative group flex-1 md:w-64">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 group-focus-within:text-indigo-500 transition-colors" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="파일 검색..."
-              className="w-full bg-white/50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-xl pl-10 pr-4 py-2.5 text-sm font-medium outline-none transition-all shadow-sm"
-            />
-          </div>
-          <button onClick={() => router.push('/')} className="p-2.5 rounded-xl hover:bg-white/50 text-slate-500 hover:text-red-500 transition-colors" aria-label="Logout">
-            <LogOut className="w-5 h-5" />
+        <nav className="flex-1 px-4 space-y-1">
+          <button
+            onClick={() => { setTab('personal'); setCurrentFolder(null); setFolderPath([]); }}
+            className={cn(
+              "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors",
+              tab === 'personal' ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-50"
+            )}
+          >
+            <User className="w-4 h-4" />
+            내 드라이브
           </button>
-        </div>
-      </header>
 
-      {/* Controls & Nav */}
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex p-1 bg-slate-200/50 rounded-xl">
-              <TabButton active={tab === 'personal'} onClick={() => { setTab('personal'); setCurrentFolder(null); setFolderPath([]); }}>
-                <User className="w-4 h-4" /> 내 드라이브
-              </TabButton>
-              <TabButton active={tab === 'team'} onClick={() => { setTab('team'); setCurrentFolder(null); setFolderPath([]); }}>
-                <Users className="w-4 h-4" /> 팀 스페이스
-              </TabButton>
-            </div>
+          <button
+            onClick={() => { setTab('team'); setCurrentFolder(null); setFolderPath([]); }}
+            className={cn(
+              "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors",
+              tab === 'team' ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-50"
+            )}
+          >
+            <Users className="w-4 h-4" />
+            팀 스페이스
+          </button>
 
-            {/* Filter Chips */}
-            <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
-              {(['all', 'image', 'video', 'doc'] as const).map(f => (
-                <button
-                  key={f}
-                  onClick={() => setFilterType(f)}
-                  className={cn(
-                    "px-3 py-1.5 rounded-full text-xs font-bold capitalize transition-colors border",
-                    filterType === f
-                      ? "bg-indigo-100 text-indigo-700 border-indigo-200"
-                      : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
-                  )}
-                >
-                  {f === 'all' ? '전체' : f === 'image' ? '이미지' : f === 'video' ? '동영상' : '문서'}
-                </button>
-              ))}
+          <div className="pt-6 mt-4 border-t border-slate-100">
+            <div className="px-3 text-xs font-bold text-slate-400 mb-2 uppercase">Storage</div>
+            <div className="px-3 py-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center gap-3">
+              <div className="p-2 bg-indigo-100 rounded-lg text-indigo-600">
+                <HardDrive className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="text-xs text-slate-500 font-medium">사용 용량</div>
+                <div className="text-sm font-bold text-slate-700">{formatBytes(storageUsed)}</div>
+              </div>
             </div>
           </div>
+        </nav>
 
-          <div className="flex items-center gap-2 self-end xl:self-auto">
-            {/* Sort Dropdown */}
+
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col min-w-0 bg-slate-50/50 h-full">
+        {/* Header / Top Bar */}
+        <header className="h-16 px-6 border-b border-slate-200/50 bg-white/50 backdrop-blur-xl flex items-center justify-between shrink-0 z-10">
+          {/* Breadcrumbs */}
+          <div className="flex items-center gap-2 text-sm text-slate-500 overflow-hidden">
+            <button
+              onClick={() => handleNavigateUp(-1)}
+              className={cn("flex items-center gap-1 hover:text-indigo-600 transition-colors shrink-0", !currentFolder && "font-bold text-indigo-600")}
+            >
+              <Home className="w-4 h-4" /> {tab === 'personal' ? '내 드라이브' : '팀 스페이스'}
+            </button>
+            {folderPath.map((folder, index) => (
+              <div key={folder.id} className="flex items-center gap-2 shrink-0">
+                <ChevronRight className="w-4 h-4 text-slate-400" />
+                <button
+                  onClick={() => handleNavigateUp(index)}
+                  className={cn("hover:text-indigo-600 transition-colors whitespace-nowrap max-w-[150px] truncate", index === folderPath.length - 1 && "font-bold text-indigo-600")}
+                >
+                  {folder.name}
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* Search & Global Actions */}
+          <div className="flex items-center gap-3">
+            <div className="relative group w-64 hidden sm:block">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 group-focus-within:text-indigo-500 transition-colors" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="파일 검색..."
+                className="w-full bg-slate-100 border-transparent focus:bg-white focus:border-indigo-500 border rounded-xl pl-10 pr-4 py-2 text-sm outline-none transition-all"
+              />
+            </div>
+          </div>
+        </header>
+
+        {/* Toolbar (Filter & Actions) */}
+        <div className="px-6 py-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4 shrink-0">
+          {/* Filter Chips */}
+          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+            {(['all', 'image', 'video', 'doc'] as const).map(f => (
+              <button
+                key={f}
+                onClick={() => setFilterType(f)}
+                className={cn(
+                  "px-3 py-1.5 rounded-full text-xs font-bold capitalize transition-colors border",
+                  filterType === f
+                    ? "bg-slate-900 text-white border-slate-900"
+                    : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
+                )}
+              >
+                {f === 'all' ? '전체' : f === 'image' ? '이미지' : f === 'video' ? '동영상' : '문서'}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Sort */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 text-sm font-medium hover:bg-slate-50 transition-colors flex items-center gap-2 shadow-sm">
@@ -402,7 +521,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
                   {sort === '-created' ? '최신순' : sort === 'name' ? '이름순' : '정렬'}
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent className="rounded-xl p-1 min-w-[150px]">
+              <DropdownMenuContent className="rounded-xl p-1 min-w-[150px]" sideOffset={5} align="end">
                 <DropdownMenuItem onClick={() => setSort('-created')} className="rounded-lg text-sm text-slate-600">최신순</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setSort('created')} className="rounded-lg text-sm text-slate-600">오래된순</DropdownMenuItem>
                 <DropdownMenuSeparator />
@@ -411,131 +530,156 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
               </DropdownMenuContent>
             </DropdownMenu>
 
-            <div className="w-px h-8 bg-slate-200 mx-1" />
+            <div className="w-px h-6 bg-slate-300 mx-1" />
 
-            <button onClick={() => setIsNewFolderOpen(true)} className="px-4 py-2 bg-white text-slate-700 font-bold rounded-xl shadow-sm hover:bg-slate-50 transition-colors flex items-center gap-2 sm:text-sm text-xs whitespace-nowrap">
-              <Plus className="w-4 h-4 text-indigo-500" /> 폴더 생성
-            </button>
-
-            <div className="flex bg-slate-200/50 rounded-lg p-0.5 shrink-0">
-              <button onClick={() => setViewMode('grid')} className={cn("p-2 rounded-md transition-all", viewMode === 'grid' ? "bg-white shadow-sm text-indigo-600" : "text-slate-500")} aria-label="Grid view">
+            <div className="flex bg-slate-100 rounded-lg p-0.5">
+              <button onClick={() => setViewMode('grid')} className={cn("p-1.5 rounded-md transition-all", viewMode === 'grid' ? "bg-white shadow-sm text-slate-900" : "text-slate-400")}>
                 <Grid className="w-4 h-4" />
               </button>
-              <button onClick={() => setViewMode('list')} className={cn("p-2 rounded-md transition-all", viewMode === 'list' ? "bg-white shadow-sm text-indigo-600" : "text-slate-500")} aria-label="List view">
+              <button onClick={() => setViewMode('list')} className={cn("p-1.5 rounded-md transition-all", viewMode === 'list' ? "bg-white shadow-sm text-slate-900" : "text-slate-400")}>
                 <ListIcon className="w-4 h-4" />
               </button>
             </div>
 
-            <label className="cursor-pointer bg-slate-900 hover:bg-black text-white px-4 py-2.5 rounded-xl font-bold custom-shadow flex items-center gap-2 transition-transform active:scale-95 shadow-lg shadow-slate-900/20 sm:text-sm text-xs whitespace-nowrap ml-2">
-              {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-              <span>업로드</span>
-              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleUploadInput} disabled={uploading} />
-            </label>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 text-sm text-slate-500 overflow-x-auto pb-2">
-          <button
-            onClick={() => handleNavigateUp(-1)}
-            className={cn("flex items-center gap-1 hover:text-indigo-600 transition-colors", !currentFolder && "font-bold text-indigo-600")}
-          >
-            <Home className="w-4 h-4" /> {tab === 'personal' ? '내 드라이브' : '팀 스페이스'}
-          </button>
-          {folderPath.map((folder, index) => (
-            <div key={folder.id} className="flex items-center gap-2">
-              <ChevronRight className="w-4 h-4 text-slate-400" />
-              <button
-                onClick={() => handleNavigateUp(index)}
-                className={cn("hover:text-indigo-600 transition-colors whitespace-nowrap", index === folderPath.length - 1 && "font-bold text-indigo-600")}
-              >
-                {folder.name}
+            <div className="flex items-center gap-2 ml-2">
+              <button onClick={() => setIsNewFolderOpen(true)} className="p-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 transition-colors" title="새 폴더">
+                <FolderInput className="w-5 h-5 text-indigo-500" />
               </button>
+
+              <label className="cursor-pointer bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-transform active:scale-95 shadow-lg shadow-indigo-500/20 sm:text-sm text-xs whitespace-nowrap">
+                {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                <span>업로드</span>
+                <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleUploadInput} disabled={uploading} />
+              </label>
             </div>
-          ))}
+          </div>
         </div>
-      </div>
 
-      <div className="flex-1 overflow-y-auto min-h-0 glass-panel rounded-3xl p-6 relative">
-        {loading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-white/50 backdrop-blur-sm z-10 rounded-3xl">
-            <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
-          </div>
-        )}
-
-        {files.length === 0 && folders.length === 0 && !loading ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-4">
-            <FolderOpen className="w-16 h-16 opacity-20" />
-            <p>이 폴더는 비어있습니다</p>
-          </div>
-        ) : (<>
-          <div className={cn(
-            "grid gap-4 pb-20",
-            viewMode === 'grid' ? "grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5" : "grid-cols-1"
-          )}>
-            {/* Go Up Button */}
-            {currentFolder && (
-              <div
-                onClick={() => handleNavigateUp(folderPath.length - 2)}
-                className={cn(
-                  "group bg-slate-100 hover:bg-slate-200 border-2 border-slate-200 border-dashed rounded-2xl cursor-pointer flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors",
-                  viewMode === 'list' && "p-3 justify-start gap-4 h-16"
-                )}
-              >
-                <ArrowUp className="w-6 h-6" />
-                {viewMode === 'list' && <span className="font-semibold">.. (상위 폴더)</span>}
-              </div>
-            )}
-
-            <AnimatePresence>
-              {folders.map(folder => (
-                <FolderCard
-                  key={folder.id}
-                  folder={folder}
-                  viewMode={viewMode}
-                  onClick={() => handleEnterFolder(folder)}
-                  onDelete={() => handleDelete(folder.id, 'folder')}
-                  onRename={() => handleRename(folder as unknown as FileRecord)}
-                />
-              ))}
-            </AnimatePresence>
-
-            <AnimatePresence>
-              {files.map(file => (
-                <FileCard
-                  key={file.id}
-                  file={file}
-                  viewMode={viewMode}
-                  onDelete={() => handleDelete(file.id, 'file')}
-                  onShare={() => handleShare(file)}
-                  onMove={() => handleMove(file)}
-                  onRename={() => handleRename(file)}
-                  onClick={() => handleFileClick(file)}
-                />
-              ))}
-            </AnimatePresence>
-          </div>
-
-          {totalPages > 1 && (
-            <div className="flex items-center justify-center gap-2 mt-6 py-4 border-t border-slate-100">
-              <button
-                onClick={() => setPage(Math.max(1, page - 1))}
-                disabled={page === 1}
-                className="px-4 py-2 bg-white border border-slate-200 rounded-xl disabled:opacity-50 hover:bg-slate-50 text-sm font-medium transition-colors"
-              >
-                이전
-              </button>
-              <span className="text-sm font-bold text-slate-600 px-2">{page} / {totalPages}</span>
-              <button
-                onClick={() => setPage(Math.min(totalPages, page + 1))}
-                disabled={page === totalPages}
-                className="px-4 py-2 bg-white border border-slate-200 rounded-xl disabled:opacity-50 hover:bg-slate-50 text-sm font-medium transition-colors"
-              >
-                다음
-              </button>
+        <div className="flex-1 overflow-y-auto min-h-0 glass-panel rounded-3xl p-6 relative">
+          {loading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-white/50 backdrop-blur-sm z-10 rounded-3xl">
+              <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
             </div>
           )}
-        </>)}
+
+          {files.length === 0 && folders.length === 0 && !loading ? (
+            <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-4">
+              <FolderOpen className="w-16 h-16 opacity-20" />
+              <p>이 폴더는 비어있습니다</p>
+            </div>
+          ) : (<>
+            <div className={cn(
+              "grid gap-4 pb-20",
+              viewMode === 'grid' ? "grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5" : "grid-cols-1"
+            )}>
+              {/* Go Up Button */}
+              {currentFolder && (
+                <div
+                  onClick={() => handleNavigateUp(folderPath.length - 2)}
+                  className={cn(
+                    "group bg-slate-100 hover:bg-slate-200 border-2 border-slate-200 border-dashed rounded-2xl cursor-pointer flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors",
+                    viewMode === 'list' && "p-3 justify-start gap-4 h-16"
+                  )}
+                >
+                  <ArrowUp className="w-6 h-6" />
+                  {viewMode === 'list' && <span className="font-semibold">.. (상위 폴더)</span>}
+                </div>
+              )}
+
+              <AnimatePresence>
+                {folders.map(folder => (
+                  <FolderCard
+                    key={folder.id}
+                    folder={folder}
+                    viewMode={viewMode}
+                    onClick={() => handleEnterFolder(folder)}
+                    onDelete={() => handleDelete(folder.id, 'folder')}
+                    onRename={() => handleRename(folder as unknown as FileRecord)}
+                  />
+                ))}
+              </AnimatePresence>
+
+              <AnimatePresence>
+                {files.map(file => (
+                  <FileCard
+                    key={file.id}
+                    file={file}
+                    viewMode={viewMode}
+                    onDelete={() => handleDelete(file.id, 'file')}
+                    onShare={() => handleShare(file)}
+                    onMove={() => handleMove(file)}
+                    onRename={() => handleRename(file)}
+                    onClick={() => handleFileClick(file)}
+                  />
+                ))}
+              </AnimatePresence>
+            </div>
+
+            {totalPages > 1 && (
+              <div className="flex items-center justify-center gap-2 mt-6 py-4 border-t border-slate-100">
+                <button
+                  onClick={() => setPage(Math.max(1, page - 1))}
+                  disabled={page === 1}
+                  className="px-4 py-2 bg-white border border-slate-200 rounded-xl disabled:opacity-50 hover:bg-slate-50 text-sm font-medium transition-colors"
+                >
+                  이전
+                </button>
+                <span className="text-sm font-bold text-slate-600 px-2">{page} / {totalPages}</span>
+                <button
+                  onClick={() => setPage(Math.min(totalPages, page + 1))}
+                  disabled={page === totalPages}
+                  className="px-4 py-2 bg-white border border-slate-200 rounded-xl disabled:opacity-50 hover:bg-slate-50 text-sm font-medium transition-colors"
+                >
+                  다음
+                </button>
+              </div>
+            )}
+          </>)}
+        </div>
       </div>
+
+      {/* Upload Progress Toast */}
+      <AnimatePresence>
+        {uploadProgress && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.9 }}
+            className="fixed bottom-6 right-6 w-80 bg-slate-900 text-white rounded-2xl p-4 shadow-2xl z-[100] border border-slate-700"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-bold text-sm flex items-center gap-2">
+                {uploadProgress.loaded === uploadProgress.total ? <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" /> : <Loader2 className="w-3 h-3 animate-spin text-indigo-400" />}
+                {uploadProgress.loaded === uploadProgress.total ? "업로드 완료" : "업로드 중..."}
+              </span>
+              <span className="text-xs text-slate-400">{uploadProgress.count} / {uploadProgress.totalCount}</span>
+            </div>
+
+            <div className="flex justify-between text-xs text-slate-300 mb-1">
+              <span>{formatBytes(uploadProgress.loaded)} / {formatBytes(uploadProgress.total)}</span>
+              <span>
+                {(() => {
+                  const elapsed = (Date.now() - uploadProgress.startTime) / 1000;
+                  if (elapsed < 1 || uploadProgress.loaded === 0) return '계산 중...';
+                  const rate = uploadProgress.loaded / elapsed; // bytes per second
+                  const remainingBytes = uploadProgress.total - uploadProgress.loaded;
+                  const remainingSeconds = remainingBytes / rate;
+                  return remainingSeconds < 0 ? '완료' : formatDuration(remainingSeconds) + ' 남음';
+                })()}
+              </span>
+            </div>
+
+            <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden mt-2">
+              <motion.div
+                className="h-full bg-indigo-500"
+                initial={{ width: 0 }}
+                animate={{ width: `${Math.min(100, (uploadProgress.loaded / uploadProgress.total) * 100)}%` }}
+                transition={{ type: 'tween', ease: 'linear' }}
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Modals */}
       <FileDetailModal

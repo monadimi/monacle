@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import PocketBase, { RecordModel } from "pocketbase";
+import { RecordModel } from "pocketbase";
 import { cookies } from "next/headers";
+import { getAdminClient } from "@/lib/admin";
 
 export async function GET(
   request: NextRequest,
@@ -17,24 +18,14 @@ export async function GET(
     // 1. Verify Session
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
+    const user = session?.value ? JSON.parse(session.value) : null;
 
-    if (!session?.value) {
+    if (!user || !user.id) {
       return new NextResponse("Unauthorized", { status: 401 });
     }
 
-    const user = JSON.parse(session.value);
-    if (!user.id) {
-      return new NextResponse("Unauthorized", { status: 401 });
-    }
-
-    // 2. Admin Client
-    const pb = new PocketBase(
-      process.env.POCKETBASE_API_URL || "https://monadb.snowman0919.site"
-    );
-    await pb.admins.authWithPassword(
-      process.env.POCKETBASE_ADMIN_EMAIL!,
-      process.env.POCKETBASE_ADMIN_PASSWORD!
-    );
+    // 2. Admin Client (Cached)
+    const pb = await getAdminClient();
 
     // 3. Ownership Check (Optional but recommended)
     // We can fetch the record to check if the user has access.

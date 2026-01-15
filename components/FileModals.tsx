@@ -267,7 +267,7 @@ export function MoveModal({
       });
 
       if (result.success) {
-        setFolders(result.folders || []);
+        setFolders((result.folders || []) as unknown as FolderRecord[]);
       }
     } catch (e) {
       console.error(e);
@@ -310,10 +310,36 @@ export function MoveModal({
 
   const handleMove = async () => {
     if (!file) return;
-    if (!currentFolderId && currentFolderId !== "") { // Allow moving to root (empty string)
-      alert("폴더를 선택해주세요.");
-      return;
+    if (!currentFolderId && currentFolderId !== null) {
+      // check only if strictly undefined or empty string if that was the semantic, 
+      // but currentFolderId initializes to null usually?
+      // In component: const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+      // Wait, if it is null, it means Root.
+      // So !currentFolderId is true for null.
+      // We want to allow null.
+
+      // Actually the previous validation was:
+      // if (!currentFolderId && currentFolderId !== "") { alert... }
+      // This implies explicit "" was allowed?
+
+      // Let's rely on explicit UI selection.
+      // If the user clicked "Move Here", and currentFolderId is null, it means Root.
+      // So this validation might be blocking root moves if not careful.
+      // Let's remove it if it blocks null.
+
     }
+    // Logic: 
+    // If currentFolderId is null -> Root.
+    // We pass "" to server for Root.
+
+    // So the check should be: are we 'ready'?
+    // Defaults to null (Ready at root).
+    // So we don't need to force selection if we default to root.
+
+    // But if we want to force user to 'select' something?
+    // With the new UI, "Root" is selected by default or explicitly.
+    // So let's allow it.
+
     if (file.id === currentFolderId) return; // Can't move into self (if it was a folder)
 
     setMoving(true);
@@ -343,10 +369,23 @@ export function MoveModal({
             </div>
           ) : (
             <div className="p-2 space-y-1">
+              <div className="mb-2 pb-2 border-b border-slate-100">
+                <button
+                  onClick={() => setCurrentFolderId(null)}
+                  className={`w-full text-left px-4 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors ${currentFolderId === null
+                    ? "bg-slate-200 text-slate-900 border-2 border-slate-300"
+                    : "bg-slate-50 text-slate-600 hover:bg-slate-100"
+                    }`}
+                >
+                  <FolderInput className="w-4 h-4 text-slate-400 fill-current" />
+                  최상위 경로 (Root)
+                </button>
+              </div>
+
               {currentFolderId && (
                 <button
                   onClick={handleGoUp}
-                  className="w-full text-left px-4 py-3 bg-indigo-50 text-indigo-700 rounded-lg font-bold flex items-center gap-2 hover:bg-indigo-100 transition-colors"
+                  className="w-full text-left px-4 py-3 bg-indigo-50 text-indigo-700 rounded-lg font-bold flex items-center gap-2 hover:bg-indigo-100 transition-colors mb-1"
                 >
                   <FolderInput className="w-4 h-4 ml-1 rotate-180" /> .. (상위 폴더)
                 </button>
@@ -357,7 +396,7 @@ export function MoveModal({
                   하위 폴더가 없습니다
                 </div>
               ) : (
-                folders.map((folder: FolderRecord) => ( // Changed folder type
+                folders.map((folder: FolderRecord) => (
                   <button
                     key={folder.id}
                     onClick={() => handleEnterFolder(folder)}
@@ -484,9 +523,11 @@ export function ShareModal({
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-md bg-white rounded-3xl p-6 shadow-2xl">
         <DialogHeader>
-          <DialogTitle className="text-xl font-bold flex items-center gap-2">
-            <Share2 className="w-5 h-5 text-indigo-600" />
-            &quot;{file.name || file.file?.[0]?.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1')}&quot; 공유
+          <DialogTitle className="text-xl font-bold flex items-center gap-2 min-w-0">
+            <Share2 className="w-5 h-5 text-indigo-600 shrink-0" />
+            <span className="truncate">
+              &quot;{file.name || file.file?.[0]?.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1')}&quot; 공유
+            </span>
           </DialogTitle>
         </DialogHeader>
 

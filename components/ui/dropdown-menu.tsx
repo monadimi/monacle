@@ -38,10 +38,10 @@ export const DropdownMenuTrigger = ({ children, asChild }: { children: React.Rea
   };
 
   if (asChild && React.isValidElement(children)) {
-    return React.cloneElement(children as React.ReactElement<any>, {
+    return React.cloneElement(children as React.ReactElement<unknown>, {
       onClick: (e: React.MouseEvent) => {
-        // @ts-ignore
-        children.props.onClick?.(e);
+        // @ts-expect-error - we are calling an unknown prop, but we know it might exist on the child
+        (children as React.ReactElement<{ onClick?: (e: React.MouseEvent) => void }>).props.onClick?.(e);
         toggle(e);
       }
     });
@@ -85,6 +85,14 @@ export const DropdownMenuItem = ({ children, onClick, className }: { children: R
     >
       {children}
     </button>
+  )
+}
+
+export const DropdownMenuLabel = ({ children, className }: { children: React.ReactNode; className?: string }) => {
+  return (
+    <div className={cn("px-4 py-2 text-sm font-semibold text-slate-500", className)}>
+      {children}
+    </div>
   )
 }
 
