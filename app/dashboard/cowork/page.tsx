@@ -7,5 +7,5 @@ export default async function CoworkPage() {
   const result = await listUserForms();
   const forms = result.success ? result.forms : [];
 
-  return <CoworkInterface initialForms={forms} />;
+  return <CoworkInterface initialForms={forms as any} />;
 }

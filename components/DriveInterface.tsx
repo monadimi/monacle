@@ -5,7 +5,7 @@ import pb from "@/lib/pocketbase";
 import {
   Search, Upload, File as FileIcon, Trash2,
   Share2, Grid, List as ListIcon,
-  User, FolderOpen, Loader2, Folder as FolderIcon, ChevronRight, Home, ArrowUp, Users, ArrowUpDown, MoreVertical, Edit2, FolderInput, HardDrive
+  User, FolderOpen, Loader2, Folder as FolderIcon, ChevronRight, Home, ArrowUp, Users, ArrowUpDown, MoreVertical, Edit2, FolderInput, HardDrive, RefreshCw, DatabaseBackup
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -14,6 +14,9 @@ import { listFiles, deleteFile, createFolder, deleteFolder, getStorageUsage } fr
 import { FileDetailModal, ShareModal, MoveModal, RenameModal } from "@/components/FileModals";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "./ui/dropdown-menu";
+
+import { localDrive } from "@/lib/local-drive";
+import { getDeltaUpdates } from "@/app/actions/sync";
 
 // ... Types (FileRecord, FolderRecord) can be imported or redefined. Keeping inline for single file edit simplicity if not shared.
 // Ideally share types. For now redefining locally to match FileModals.
@@ -28,8 +31,10 @@ type FileRecord = {
   updated: string;
   is_shared: boolean;
   short_id?: string;
-  size?: number; // Added size if available from PB info
-  name?: string; // Added name
+  size?: number;
+  name?: string;
+  folder?: string; // Added folder field
+  tVersion?: number; // Added tVersion
   expand?: {
     owner?: {
       name?: string;
@@ -45,6 +50,7 @@ type FolderRecord = {
   parent: string;
   created: string;
   updated: string;
+  tVersion?: number; // Added tVersion
 };
 
 export default function DriveInterface({ user }: { user: { id: string; email: string; name: string; token: string } }) {
@@ -129,50 +135,172 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
     }
   }, [tab]);
 
-  // Fetch Files & Folders
-  const refreshFiles = useCallback(async (targetPage = page) => {
-    setLoading(true);
-    refreshStorage(); // Update storage too
-    try {
-      const ownerFilter = tab === 'personal'
-        ? `owner = "${user.id}"`
-        : `owner = "TEAM_MONAD"`;
+  // --- Sync & Load Logic ---
+  const loadFromLocal = useCallback(async () => {
+    if (!user?.id) return;
 
-      const result = await listFiles(targetPage, PER_PAGE, {
-        sort: sort,
-        filter: ownerFilter,
-        folderId: currentFolder?.id || "root",
-        search: search, // Pass search term
-        type: filterType // Pass filter type (image, video, etc.)
+    let allFiles = await localDrive.getAllFiles();
+    let allFolders = await localDrive.getAllFolders();
+
+    // Owner Filter
+    if (tab === 'personal') {
+      allFiles = allFiles.filter((f: any) => f.owner === user.id);
+      allFolders = allFolders.filter((f: any) => f.owner === user.id);
+    } else {
+      // Team: Assume anything not me is shared/team. 
+      // Ideally should check team ID, but for now this matches "Team Space" concept roughly?
+      // Actually user.id owned files can also be in team folders?
+      // Let's stick to simple: Personal = My ID, Team = Not My ID.
+      allFiles = allFiles.filter((f: any) => f.owner !== user.id);
+      allFolders = allFolders.filter((f: any) => f.owner !== user.id);
+    }
+
+    // Folder Filter
+    const currentId = currentFolder ? currentFolder.id : "";
+    const filteredFiles = allFiles.filter((f: any) => (f.folder || "") === currentId);
+    const filteredFolders = allFolders.filter((f: any) => (f.parent || "") === currentId);
+
+    // Search & Type Filter
+    let finalFiles = filteredFiles;
+    let finalFolders = filteredFolders;
+
+    if (search) {
+      finalFiles = allFiles.filter((f: any) => f.name.toLowerCase().includes(search.toLowerCase()));
+      // Search across all folders usually? Or current?
+      // Standard behavior: Search usually searches globally or recursively.
+      // Let's search ALL files matching owner.
+      finalFiles = allFiles.filter((f: any) => f.name.toLowerCase().includes(search.toLowerCase()));
+      finalFolders = allFolders.filter((f: any) => f.name.toLowerCase().includes(search.toLowerCase()));
+    } else if (filterType !== 'all') {
+      finalFiles = finalFiles.filter((f: any) => {
+        const ext = f.name.split('.').pop()?.toLowerCase();
+        if (filterType === 'image') return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext || '');
+        if (filterType === 'video') return ['mp4', 'mov', 'webm'].includes(ext || '');
+        if (filterType === 'doc') return ['pdf', 'doc', 'docx', 'txt', 'md'].includes(ext || '');
+        return true;
       });
+      finalFolders = []; // Don't show folders in type filter
+    }
 
-      if (result.success) {
-        setFiles(result.files as unknown as FileRecord[]);
-        // Only show folders on first page or always? standard is mixed, but listFiles returns separately.
-        // Let's show folders only on page 1 to avoid duplication if API is stateless regarding folders
-        setFolders(targetPage === 1 ? result.folders as unknown as FolderRecord[] : []);
-        setTotalPages(result.totalPages || 1);
+    // Sort
+    const sortFn = (a: any, b: any) => {
+      if (sort === '-created') return new Date(b.created).getTime() - new Date(a.created).getTime();
+      if (sort === 'created') return new Date(a.created).getTime() - new Date(b.created).getTime();
+      if (sort === 'name') return a.name.localeCompare(b.name);
+      if (sort === '-name') return b.name.localeCompare(a.name);
+      return 0;
+    };
+
+    setFiles(finalFiles.sort(sortFn));
+    setFolders(finalFolders.sort(sortFn));
+    setLoading(false);
+  }, [tab, currentFolder, search, filterType, sort, user]);
+
+  const syncFiles = useCallback(async (retryCount = 0) => {
+    try {
+      // Don't set loading true here to avoid flickering if we have local data?
+      // Maybe only on first load?
+      // setLoading(true); 
+
+      const localVer = await localDrive.getSyncVersion();
+      const filterMode = tab === 'team' ? 'team' : 'personal';
+
+      const { success, hasUpdates, version, changes, error, resetRequired } = await getDeltaUpdates(localVer, filterMode);
+
+      if (success) {
+        if (resetRequired) {
+          console.log("Local version too old or invalid. Resetting...");
+          await localDrive.clearAll();
+          // Pass retryCount check? No, resetRequired is explicit instruction. But we can limit loops just in case.
+          if (retryCount > 2) {
+            console.error("Too many resets. Aborting.");
+            return;
+          }
+          return syncFiles(retryCount + 1);
+        }
+
+        if (hasUpdates && changes) {
+          // 1. Delete
+          const deletedIds = changes.deleted.map((d: any) => d.targetId);
+          if (deletedIds.length > 0) {
+            await localDrive.deleteFiles(deletedIds);
+            await localDrive.deleteFolders(deletedIds);
+          }
+
+          // 2. Upsert
+          await localDrive.saveFiles(changes.files);
+          await localDrive.saveFolders(changes.folders);
+
+          // 3. Update Version
+          if (version) await localDrive.setSyncVersion(version);
+
+          // Refresh View
+          loadFromLocal();
+        }
       } else {
-        throw new Error(result.error);
+        throw new Error(error || "Sync returned unsuccess");
       }
+    } catch (e) {
+      console.error("Sync Exception:", e);
+      // Silent Fallback: If partial sync failed, try full reset once
+      if (retryCount === 0) {
+        console.log("Partial sync failed. Attempting full reset fallback...", e);
+        try {
+          await localDrive.clearAll();
+          return syncFiles(1);
+        } catch (resetError) {
+          console.error("Fallback reset also failed:", resetError);
+        }
+      }
+    }
+  }, [tab, loadFromLocal]);
 
-    } catch (err) {
-      console.error("Failed to fetch files", err);
+  // Initial Load & Query Effects
+  useEffect(() => {
+    loadFromLocal();
+  }, [loadFromLocal]);
+
+  // Trigger Sync on mount/tab change
+  useEffect(() => {
+    syncFiles();
+  }, [syncFiles]);
+
+  // Wrapper for manual refresh calls
+  // Wrapper for manual refresh calls
+  const refreshFiles = () => {
+    syncFiles();
+  };
+
+  const handleSyncNow = async () => {
+    setLoading(true);
+    await syncFiles();
+    setLoading(false);
+  };
+
+  const handleHardReset = async () => {
+    if (!confirm("주의: 로컬 데이터를 모두 지우고 서버에서 새로 받아옵니다.\n이 작업은 서버 부하를 유발할 수 있습니다.\n계속하시겠습니까?")) return;
+
+    setLoading(true);
+    try {
+      await localDrive.clearAll();
+      await syncFiles(); // Will fetch from version 0
+      alert("데이터를 새로 받아왔습니다.");
+    } catch (e) {
+      console.error(e);
+      alert("초기화 실패");
     } finally {
       setLoading(false);
     }
-  }, [tab, search, user, currentFolder, sort, filterType, page, refreshStorage]);
+  };
+
 
   useEffect(() => {
-    refreshFiles(1); // Reset to page 1 on filter change
     setPage(1);
     setNewFolderName("");
-  }, [tab, search, currentFolder, sort, filterType, refreshFiles]); // Added refreshFiles
+  }, [tab, search, currentFolder, sort, filterType]);
 
   // Re-fetch when page changes (controlled by pagination UI)
-  useEffect(() => {
-    if (page > 1) refreshFiles(page);
-  }, [page, refreshFiles]); // Added refreshFiles
+
 
 
   // ... navigation ...
@@ -196,6 +324,32 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
   };
 
   // Create Folder
+
+
+  const handleReloadFile = async (file: FileRecord) => {
+    setLoading(true); // Maybe use a separate loading state for card? But global is safer to prevent interaction.
+    try {
+      // Fetch fresh record from PB
+      const freshRecord = await pb.collection(file.collectionName || "cloud").getOne(file.id);
+      // Update local DB
+      await localDrive.saveFiles([freshRecord]);
+      // Recalculate view
+      loadFromLocal();
+    } catch (e: any) {
+      // If 404, it means file is deleted on server. Remove from local.
+      if (e?.status === 404) {
+        await localDrive.deleteFiles([file.id]);
+        loadFromLocal();
+        alert("서버에서 삭제된 파일입니다. 로컬 목록에서 제거했습니다.");
+      } else {
+        console.error("Reload file failed:", e);
+        alert("파일 정보를 갱신하지 못했습니다.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleCreateFolder = async () => {
     if (!newFolderName.trim()) return;
     try {
@@ -490,6 +644,28 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
                 className="w-full bg-slate-100 border-transparent focus:bg-white focus:border-indigo-500 border rounded-xl pl-10 pr-4 py-2 text-sm outline-none transition-all"
               />
             </div>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors">
+                  <MoreVertical className="w-5 h-5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56 rounded-xl p-1">
+                <DropdownMenuItem onClick={handleSyncNow} disabled={loading} className="gap-2 p-2.5 rounded-lg text-slate-600 focus:text-indigo-600 focus:bg-indigo-50">
+                  <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+                  <span className="font-medium">지금 동기화</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={handleHardReset} disabled={loading} className="gap-2 p-2.5 rounded-lg text-red-500 focus:text-red-600 focus:bg-red-50">
+                  <DatabaseBackup className="w-4 h-4" />
+                  <div className="flex flex-col items-start gap-0.5">
+                    <span className="font-medium">데이터 새로 받아오기</span>
+                    <span className="text-[10px] text-red-400/80">로컬 데이터를 초기화합니다</span>
+                  </div>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </header>
 
@@ -611,6 +787,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
                     onMove={() => handleMove(file)}
                     onRename={() => handleRename(file)}
                     onClick={() => handleFileClick(file)}
+                    onReload={() => handleReloadFile(file)}
                   />
                 ))}
               </AnimatePresence>
@@ -760,7 +937,7 @@ function FolderCard({ folder, viewMode, onClick, onDelete, onRename }: { folder:
   )
 }
 
-function FileCard({ file, viewMode, onDelete, onShare, onMove, onRename, onClick }: { file: FileRecord, viewMode: 'grid' | 'list', onDelete: () => void, onShare: () => void, onMove: () => void, onRename: () => void, onClick: () => void }) {
+function FileCard({ file, viewMode, onDelete, onShare, onMove, onRename, onClick, onReload }: { file: FileRecord, viewMode: 'grid' | 'list', onDelete: () => void, onShare: () => void, onMove: () => void, onRename: () => void, onClick: () => void, onReload: () => void }) {
   // Use lazy loading and thumbnail size for grid view optimization
   // PocketBase supports ?thumb=100x100 etc. passed to proxy
   // Proxy passes all params to PB.
@@ -813,6 +990,9 @@ function FileCard({ file, viewMode, onDelete, onShare, onMove, onRename, onClick
               </DropdownMenuItem>
               <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); onMove(); }}>
                 <FolderInput className="w-4 h-4 mr-2" /> 이동
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); onReload(); }}>
+                <RefreshCw className="w-4 h-4 mr-2" /> 새로고침
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); onDelete(); }} className="text-red-500 hover:text-red-600">

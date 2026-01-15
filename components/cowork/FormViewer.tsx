@@ -170,7 +170,13 @@ export default function FormViewer({ formId, initialData }: { formId: string, in
 
     if (currentStep < form.questions.length + 1) {
       setDirection(1);
-      setCurrentStep(prev => prev + 1);
+      const nextStep = currentStep + 1;
+      setCurrentStep(nextStep);
+
+      // Check if next step is the last one (Outro) and trigger submit
+      if (nextStep === form.questions.length + 1) {
+        submit();
+      }
     }
   };
 
@@ -187,13 +193,6 @@ export default function FormViewer({ formId, initialData }: { formId: string, in
     await submitResponse(form.id, answers);
     setIsSubmitting(false);
   };
-
-  // Trigger submit when reaching the last step (Outro)
-  useEffect(() => {
-    if (form && currentStep === form.questions.length + 1) {
-      submit();
-    }
-  }, [currentStep, form]);
 
   // Keyboard Navigation
   useEffect(() => {
@@ -351,7 +350,7 @@ export default function FormViewer({ formId, initialData }: { formId: string, in
                 {currentQ.type === 'slider' && (
                   <div className="flex flex-col gap-6 py-6">
                     <div className="text-5xl font-black text-slate-900 text-center">
-                      {answers[currentQ.id] || (currentQ.min || 0)}
+                      {answers[currentQ.id] as number || (currentQ.min || 0)}
                     </div>
                     <input
                       type="range"

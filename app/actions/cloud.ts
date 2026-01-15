@@ -52,6 +52,23 @@ async function getOrCreateTeamUser(pb: PocketBase) {
   }
 }
 
+// Global Version Control Helper
+// Global Version Control Helper
+async function incrementVersion(pb: PocketBase): Promise<number> {
+  const VERSION_Record_ID = "nubmsjlcwqh10wb";
+  try {
+    const record = await pb.collection("tVersion").getOne(VERSION_Record_ID);
+    const nextVersion = (record.version || 0) + 1;
+    await pb.collection("tVersion").update(VERSION_Record_ID, {
+      version: nextVersion,
+    });
+    return nextVersion;
+  } catch (e) {
+    console.error("Failed to increment version:", e);
+    return 0;
+  }
+}
+
 export async function createFolder(
   name: string,
   parentId?: string,
@@ -83,12 +100,14 @@ export async function createFolder(
       }
     }
 
+    const version = await incrementVersion(pb);
     const data = {
       name,
       parent: parentId || "", // Relation ID or empty
       owner: owner,
       is_shared: false,
       share_type: "none",
+      tVersion: version,
     };
 
     const record = await pb.collection("folders").create(data);
@@ -122,11 +141,13 @@ export async function uploadFile(formData: FormData) {
       }
     }
 
+    const version = await incrementVersion(pb);
     const data = {
       file: file,
       name: file.name, // Use original filename
       owner: owner,
       folder: folderId || "",
+      tVersion: version,
     };
 
     const record = await pb.collection("cloud").create(data);
@@ -289,6 +310,20 @@ export async function deleteFile(id: string) {
     }
 
     await pb.collection("cloud").delete(id);
+    const version = await incrementVersion(pb);
+
+    // Log deletion
+    try {
+      await pb.collection("tDeleted").create({
+        targetId: id,
+        type: "file",
+        tVersion: version,
+        owner: record.owner,
+      });
+    } catch (e) {
+      console.error("Failed to log file deletion:", e);
+    }
+
     return { success: true };
   } catch (error: unknown) {
     return { success: false, error: (error as Error).message };
@@ -337,6 +372,19 @@ export async function deleteFolder(id: string) {
     }
 
     await pb.collection("folders").delete(id);
+    const version = await incrementVersion(pb);
+
+    // Log deletion
+    try {
+      await pb.collection("tDeleted").create({
+        targetId: id,
+        type: "folder",
+        tVersion: version,
+        owner: record.owner,
+      });
+    } catch (e) {
+      console.error("Failed to log folder deletion:", e);
+    }
 
     return { success: true };
   } catch (error: unknown) {
@@ -371,6 +419,9 @@ export async function updateFileShare(
     }
 
     // 3. Update
+    const version = await incrementVersion(pb);
+    // @ts-expect-error - dynamic assignment
+    data.tVersion = version;
     await pb.collection("cloud").update(id, data);
 
     return { success: true };
@@ -416,7 +467,6 @@ export async function updateFile(
       try {
         const newParent = await pb.collection("folders").getOne(data.folder);
         // Cast to unknown first to avoid strict type error if we didn't define data type fully
-        // @ts-expect-error - dynamic assignment
         (data as unknown as Record<string, unknown>).owner = newParent.owner;
       } catch {
         // If folder not found (maybe moving to root?), or error.
@@ -426,6 +476,9 @@ export async function updateFile(
       }
     }
 
+    const version = await incrementVersion(pb);
+    // @ts-expect-error - dynamic assignment
+    data.tVersion = version;
     await pb.collection("cloud").update(id, data);
 
     return { success: true };
@@ -457,13 +510,15 @@ export async function updateFolder(
     if (data.parent) {
       try {
         const newParent = await pb.collection("folders").getOne(data.parent);
-        // @ts-expect-error - dynamic assignment
         (data as unknown as Record<string, unknown>).owner = newParent.owner;
       } catch {
         // ignore
       }
     }
 
+    const version = await incrementVersion(pb);
+    // @ts-expect-error - dynamic assignment
+    data.tVersion = version;
     await pb.collection("folders").update(id, data);
     return { success: true };
   } catch (error: unknown) {
@@ -506,5 +561,39 @@ export async function getStorageUsage(isTeam: boolean) {
       fileCount: 0,
       error: (error as Error).message,
     };
+  }
+}
+
+export async function pruneOldDeletedRecords() {
+  const MAX_VERSION_DIFF = 300;
+  try {
+    const pb = await getAdminClient();
+    // Get current version
+    const verRecord = await pb.collection("tVersion").getOne("nubmsjlcwqh10wb");
+    const currentVersion = verRecord.version || 0;
+
+    if (currentVersion <= MAX_VERSION_DIFF) return { success: true, count: 0 };
+
+    const threshold = currentVersion - MAX_VERSION_DIFF;
+
+    // Find records older than threshold
+    // Filter: tVersion < threshold
+    const oldRecords = await pb.collection("tDeleted").getFullList({
+      filter: `tVersion < ${threshold}`,
+      fields: "id",
+      $autoCancel: false,
+    });
+
+    if (oldRecords.length === 0) return { success: true, count: 0 };
+
+    // Batch delete
+    await Promise.all(
+      oldRecords.map((r) => pb.collection("tDeleted").delete(r.id))
+    );
+
+    return { success: true, count: oldRecords.length };
+  } catch (e: unknown) {
+    console.error("Prune Failed:", e);
+    return { success: false, error: (e as Error).message };
   }
 }

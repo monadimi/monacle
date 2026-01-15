@@ -38,9 +38,8 @@ export const DropdownMenuTrigger = ({ children, asChild }: { children: React.Rea
   };
 
   if (asChild && React.isValidElement(children)) {
-    return React.cloneElement(children as React.ReactElement<unknown>, {
+    return React.cloneElement(children as any, {
       onClick: (e: React.MouseEvent) => {
-        // @ts-expect-error - we are calling an unknown prop, but we know it might exist on the child
         (children as React.ReactElement<{ onClick?: (e: React.MouseEvent) => void }>).props.onClick?.(e);
         toggle(e);
       }
@@ -72,12 +71,18 @@ export const DropdownMenuContent = ({ children, className, align = "end", sideOf
   );
 }
 
-export const DropdownMenuItem = ({ children, onClick, className }: { children: React.ReactNode; onClick?: (e: React.MouseEvent) => void; className?: string }) => {
+export const DropdownMenuItem = ({ children, onClick, className, disabled }: { children: React.ReactNode; onClick?: (e: React.MouseEvent) => void; className?: string; disabled?: boolean }) => {
   const ctx = React.useContext(DropdownMenuContext);
   return (
     <button
-      className={cn("text-slate-700 flex w-full items-center px-4 py-2.5 text-sm hover:bg-slate-50 transition-colors font-medium", className)}
+      disabled={disabled}
+      className={cn(
+        "text-slate-700 flex w-full items-center px-4 py-2.5 text-sm font-medium transition-colors",
+        disabled ? "opacity-50 cursor-not-allowed" : "hover:bg-slate-50 cursor-pointer",
+        className
+      )}
       onClick={(e) => {
+        if (disabled) return;
         e.stopPropagation();
         onClick?.(e);
         ctx?.setOpen(false);

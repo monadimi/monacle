@@ -196,7 +196,7 @@ export default function FormBuilder({ formId, initialData }: { formId: string, i
       await updateForm(formId, {
         title: form.title,
         description: form.description,
-        questions: form.questions
+        questions: form.questions as any
       });
       // alert("저장되었습니다."); 
     } catch {

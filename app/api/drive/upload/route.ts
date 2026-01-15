@@ -35,6 +35,23 @@ async function getOrCreateTeamUser(pb: PocketBase) {
   }
 }
 
+// Helper for incrementing version
+// Helper for incrementing version
+async function incrementVersion(pb: PocketBase): Promise<number> {
+  const VERSION_Record_ID = "nubmsjlcwqh10wb";
+  try {
+    const record = await pb.collection("tVersion").getOne(VERSION_Record_ID);
+    const nextVersion = (record.version || 0) + 1;
+    await pb.collection("tVersion").update(VERSION_Record_ID, {
+      version: nextVersion,
+    });
+    return nextVersion;
+  } catch (e) {
+    console.error("Failed to increment version on upload:", e);
+    return 0;
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const cookieStore = await cookies();
@@ -76,6 +93,8 @@ export async function POST(request: NextRequest) {
     formData.delete("isTeam");
 
     // Upload to PocketBase
+    const version = await incrementVersion(pb);
+    formData.append("tVersion", version.toString());
     const record = await pb.collection("cloud").create(formData);
 
     return NextResponse.json({ success: true, record });

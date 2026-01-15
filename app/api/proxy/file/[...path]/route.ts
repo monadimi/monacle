@@ -113,13 +113,24 @@ export async function GET(
     const dispositionType = isPreviewable ? "inline" : "attachment";
     const encodedName = encodeURIComponent(cleanName);
 
-    return new NextResponse(response.body, {
+    // Apply Throttling (5MB/s)
+    let streamBody: any = response.body;
+    const BANDWIDTH_LIMIT = 1024 * 1024 * 5;
+
+    if (streamBody) {
+      streamBody = makeThrottledStream(streamBody, BANDWIDTH_LIMIT);
+    }
+
+    return new NextResponse(streamBody, {
       headers: {
         "Content-Type": contentType,
-        "Cache-Control":
-          "no-store, no-cache, must-revalidate, proxy-revalidate",
-        Pragma: "no-cache",
-        Expires: "0",
+        // Cache images aggressively (immutable), others standard 1h
+        "Cache-Control": contentType.startsWith("image/")
+          ? "public, max-age=31536000, immutable"
+          : "public, max-age=3600",
+        // Remove Pragma/Expires to let Cache-Control take precedence or set appropriately
+        // "Pragma": "no-cache",
+        // "Expires": "0",
         // Use filename* for proper UTF-8 handling
         "Content-Disposition": `${dispositionType}; filename="${encodedName}"; filename*=UTF-8''${encodedName}`,
       },
@@ -128,4 +139,37 @@ export async function GET(
     console.error("Proxy Error:", error);
     return new NextResponse("Internal Server Error", { status: 500 });
   }
+}
+
+function makeThrottledStream(
+  inputStream: ReadableStream<any>,
+  bytesPerSecond: number
+): ReadableStream<Uint8Array> {
+  const reader = inputStream.getReader();
+  let start = Date.now();
+  let bytesSent = 0;
+
+  return new ReadableStream({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+
+      bytesSent += value.byteLength;
+      const elapsedSeconds = (Date.now() - start) / 1000;
+      const expectedSeconds = bytesSent / bytesPerSecond;
+
+      if (elapsedSeconds < expectedSeconds) {
+        const delay = (expectedSeconds - elapsedSeconds) * 1000;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+
+      controller.enqueue(value);
+    },
+    cancel() {
+      reader.cancel();
+    },
+  });
 }
