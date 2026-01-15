@@ -62,6 +62,11 @@ export async function POST(request: NextRequest) {
     // Append proper owner
     formData.append("owner", ownerId);
 
+    // Generate unique short_id
+    // Simple 10-char random string
+    const short_id = Math.random().toString(36).substring(2, 12);
+    formData.append("short_id", short_id);
+
     // Handle root folder
     if (!formData.has("folder") || formData.get("folder") === "root") {
       formData.delete("folder");
@@ -74,11 +79,12 @@ export async function POST(request: NextRequest) {
     const record = await pb.collection("cloud").create(formData);
 
     return NextResponse.json({ success: true, record });
-  } catch (error: unknown) {
+  } catch (error: any) {
     console.error("Upload Error:", error);
-    return NextResponse.json(
-      { error: (error as Error).message || "Upload failed" },
-      { status: 500 }
-    );
+    // Return detailed PB error if available
+    const errorMessage = error?.data
+      ? JSON.stringify(error.data)
+      : error.message || "Upload failed";
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }

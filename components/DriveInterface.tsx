@@ -285,7 +285,8 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
         formData.append('file', file);
         formData.append('isTeam', tab === 'team' ? 'true' : 'false');
         if (targetFolderId !== "root") formData.append('folder', targetFolderId);
-        // formData.append('name', file.name); // Optional
+        if (targetFolderId !== "root") formData.append('folder', targetFolderId);
+        formData.append('name', file.name); // explicitly adding name
 
         await uploadFileClient(formData, (loaded) => {
           // loaded is for *this file*
