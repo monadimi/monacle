@@ -12,13 +12,14 @@ import {
   Filter,
   Grid,
   List as ListIcon,
-  Star
+  Star,
+  Trash2,
+  MoreVertical
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
-import { createForm, createDoc, deleteForm, deleteDoc } from "@/app/actions/cowork";
-import { Trash2, MoreVertical } from "lucide-react";
+import { createForm, createDoc, deleteForm, deleteDoc, createBoard, deleteBoard } from "@/app/actions/cowork";
 
 const templates = [
   { id: "t1", title: "빈 문서", type: "doc", icon: FileText, color: "bg-blue-500" },
@@ -26,20 +27,32 @@ const templates = [
   { id: "t3", title: "프로젝트 트래커", type: "sheet", icon: Table, color: "bg-emerald-500" },
   { id: "t4", title: "피치 데크", type: "slide", icon: Presentation, color: "bg-amber-500" },
   { id: "t5", title: "피드백 설문", type: "form", icon: FormInput, color: "bg-purple-500" },
+  { id: "t6", title: "아이디어 보드", type: "board", icon: LayoutDashboard, color: "bg-pink-500" },
 ];
 
 export default function CoworkInterface({ initialItems = [] }: { initialItems?: any[] }) {
   const router = useRouter();
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [items, setItems] = useState(() =>
-    initialItems.map(item => ({
-      id: item.id,
-      title: item.title,
-      type: item.questions ? 'form' : 'doc',
-      owner: 'Me',
-      updated: new Date(item.updated).toLocaleDateString(),
-      starred: false
-    })).sort((a, b) => new Date(b.updated).getTime() - new Date(a.updated).getTime())
+    initialItems
+      .sort((a, b) => {
+        const dateA = new Date(a.updated || a.created || 0).getTime();
+        const dateB = new Date(b.updated || b.created || 0).getTime();
+        return dateB - dateA;
+      })
+      .map(item => {
+        const date = new Date(item.updated || item.created);
+        const dateStr = isNaN(date.getTime()) ? "방금 전" : date.toLocaleDateString();
+        
+        return {
+          id: item.id,
+          title: item.title,
+          type: item.elements ? 'board' : (item.questions ? 'form' : 'doc'),
+          owner: 'Me',
+          updated: dateStr,
+          starred: false
+        };
+      })
   );
 
   const getIcon = (type: string) => {
@@ -68,6 +81,13 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
       } else {
         alert("문서 생성 실패: " + result.error);
       }
+    } else if (type === 'board') {
+      const result = await createBoard();
+      if (result.success && result.id) {
+        router.push(`/dashboard/cowork/board/${result.id}`);
+      } else {
+        alert("보드 생성 실패: " + result.error);
+      }
     } else {
       alert(`${type} 생성 기능은 준비 중입니다!`);
     }
@@ -76,7 +96,7 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
   const handleDelete = async (id: string, type: string) => {
     if (!confirm("정말로 삭제하시겠습니까?")) return;
 
-    const res = type === 'form' ? await deleteForm(id) : await deleteDoc(id);
+    const res = type === 'form' ? await deleteForm(id) : (type === 'board' ? await deleteBoard(id) : await deleteDoc(id));
     if (res.success) {
       setItems(prev => prev.filter(item => item.id !== id));
     } else {
@@ -180,6 +200,7 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
                   onClick={() => {
                     if (file.type === 'form') router.push(`/dashboard/cowork/form/${file.id}`);
                     else if (file.type === 'doc') router.push(`/dashboard/cowork/doc/${file.id}`);
+                    else if (file.type === 'board') router.push(`/dashboard/cowork/board/${file.id}`);
                   }}
                 >
                   <div className="w-full h-3 bg-slate-200/50 rounded-full" />
@@ -208,8 +229,8 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
                           <MoreVertical className="w-4 h-4" />
                         </button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="rounded-xl">
-                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleDelete(file.id, file.type); }} className="text-red-600 focus:text-red-700 focus:bg-red-50 cursor-pointer p-2.5">
+                      <DropdownMenuContent align="end" collisionPadding={10} className="rounded-xl min-w-[120px] bg-white/95 backdrop-blur-xl border-slate-100 shadow-xl z-[70]">
+                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleDelete(file.id, file.type); }} className="text-red-600 focus:text-red-700 focus:bg-red-50 cursor-pointer p-2.5 rounded-lg">
                           <Trash2 className="w-4 h-4 mr-2" /> 삭제
                         </DropdownMenuItem>
                       </DropdownMenuContent>
@@ -242,7 +263,13 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
               <Plus className="w-8 h-8 group-hover:rotate-90 transition-transform duration-500" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent side="top" align="end" sideOffset={15} className="w-64 p-2 rounded-2xl border-slate-100 shadow-2xl bg-white/95 backdrop-blur-xl z-[70]">
+          <DropdownMenuContent 
+            side="top" 
+            align="end" 
+            sideOffset={15} 
+            collisionPadding={20}
+            className="w-64 p-2 rounded-2xl border-slate-100 shadow-2xl bg-white/95 backdrop-blur-xl z-[70] max-h-[calc(100vh-100px)] overflow-y-auto custom-scroll"
+          >
             <DropdownMenuItem className="p-3 cursor-pointer rounded-xl focus:bg-blue-50 focus:text-blue-700 transition-colors" onClick={() => handleCreate('doc')}>
               <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center mr-4 text-blue-600 shadow-sm">
                 <FileText className="w-5 h-5" />
@@ -268,6 +295,15 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
               <div className="flex flex-col gap-0.5">
                 <span className="font-bold text-sm">새 설문지</span>
                 <span className="text-[11px] text-slate-400">설문조사 및 퀴즈</span>
+              </div>
+            </DropdownMenuItem>
+            <DropdownMenuItem className="p-3 cursor-pointer rounded-xl focus:bg-pink-50 focus:text-pink-700 transition-colors" onClick={() => handleCreate('board')}>
+              <div className="w-10 h-10 rounded-xl bg-pink-100 flex items-center justify-center mr-4 text-pink-600 shadow-sm">
+                <LayoutDashboard className="w-5 h-5" />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <span className="font-bold text-sm">새 아이디어 보드</span>
+                <span className="text-[11px] text-slate-400">무한 캔버스 화이트보드</span>
               </div>
             </DropdownMenuItem>
           </DropdownMenuContent>

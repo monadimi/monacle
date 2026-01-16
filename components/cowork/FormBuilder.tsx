@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
-import { updateForm, getFormResponses, toggleFormStatus } from "@/app/actions/cowork";
+import { updateForm, getFormResponses, toggleFormStatus, toggleSharing } from "@/app/actions/cowork";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
@@ -54,12 +54,15 @@ interface Form {
   description: string;
   questions: Question[];
   isActive?: boolean;
+  is_shared?: boolean;
+  share_team?: boolean;
 }
 
 export default function FormBuilder({ formId, initialData }: { formId: string, initialData?: Form }) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<'questions' | 'responses' | 'settings'>('questions');
   const [isSaving, setIsSaving] = useState(false);
+  const [lastSavedForm, setLastSavedForm] = useState<string>(JSON.stringify(initialData || {}));
 
   // Initialization
   const [form, setForm] = useState<Form>(initialData || {
@@ -79,6 +82,8 @@ export default function FormBuilder({ formId, initialData }: { formId: string, i
 
   // New States for Features
   const [isShareOpen, setIsShareOpen] = useState(false);
+  const [isShared, setIsShared] = useState(!!initialData?.is_shared);
+  const [shareTeam, setShareTeam] = useState(!!initialData?.share_team);
   const [responses, setResponses] = useState<{ id: string, created: string, answers: Record<string, unknown> }[]>([]);
   const [isLoadingResponses, setIsLoadingResponses] = useState(false);
 
@@ -92,6 +97,21 @@ export default function FormBuilder({ formId, initialData }: { formId: string, i
       });
     }
   }, [activeTab, formId]);
+
+  // Save Protection (Data Loss Prevention)
+  const hasUnsavedChanges = JSON.stringify(form) !== lastSavedForm;
+
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges || isSaving) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasUnsavedChanges, isSaving]);
 
   // Handlers
   const addQuestion = (idx: number) => {
@@ -198,6 +218,7 @@ export default function FormBuilder({ formId, initialData }: { formId: string, i
         description: form.description,
         questions: form.questions as any
       });
+      setLastSavedForm(JSON.stringify(form));
       // alert("저장되었습니다."); 
     } catch {
       alert("저장 실패");
@@ -217,6 +238,16 @@ export default function FormBuilder({ formId, initialData }: { formId: string, i
   const copyShareLink = () => {
     navigator.clipboard.writeText(shareUrl);
     alert("링크가 복사되었습니다!");
+  };
+
+  const handleToggleShare = async (forceTeam?: boolean) => {
+    const nextShared = true; // For forms, 'share' typically means public anyway in this UI
+    const nextTeam = forceTeam !== undefined ? forceTeam : shareTeam;
+    const res = await toggleSharing("forms", formId, nextShared, "view", nextTeam);
+    if (res.success) {
+      setIsShared(nextShared);
+      setShareTeam(nextTeam);
+    }
   };
 
   return (
@@ -647,15 +678,33 @@ export default function FormBuilder({ formId, initialData }: { formId: string, i
           <DialogHeader>
             <DialogTitle className="text-xl font-bold">설문 보내기</DialogTitle>
           </DialogHeader>
-          <div className="mt-4">
-            <label className="text-sm font-bold text-slate-500 mb-2 block">링크 공유</label>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 bg-slate-50/50 border border-slate-200 rounded-xl px-4 py-3 text-slate-600 truncate text-sm">
-                {shareUrl}
+          <div className="mt-4 space-y-6">
+            <div className="flex items-center justify-between p-6 bg-slate-50 rounded-[32px] border border-slate-200/50">
+              <div className="space-y-1">
+                <div className="font-bold text-slate-800 text-xs uppercase tracking-widest">팀 대시보드</div>
+                <div className="text-[10px] text-slate-400 font-medium">구성원들의 Cowork 대시보드에 설문을 표시합니다.</div>
               </div>
-              <button onClick={copyShareLink} className="p-3 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-xl transition-colors font-bold">
-                <Copy className="w-5 h-5" />
+              <button
+                onClick={() => handleToggleShare(!shareTeam)}
+                className={cn("w-14 h-8 rounded-full relative transition-all duration-300", shareTeam ? "bg-purple-600" : "bg-slate-200")}
+              >
+                <div className={cn("absolute top-1 w-6 h-6 bg-white rounded-full transition-all duration-300 shadow-sm", shareTeam ? "left-7" : "left-1")} />
               </button>
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-2">비밀 링크</label>
+              <div className="flex items-center gap-3">
+                <div className="flex-1 bg-white border border-slate-200 rounded-[24px] px-6 py-4 text-slate-800 truncate text-[11px] font-bold">
+                  {shareUrl}
+                </div>
+                <button
+                  onClick={copyShareLink}
+                  className="w-14 h-14 bg-purple-600 text-white rounded-[24px] flex items-center justify-center active:scale-90 transition-all shadow-lg shadow-purple-200"
+                >
+                  <Copy className="w-5 h-5" />
+                </button>
+              </div>
             </div>
           </div>
 

@@ -11,29 +11,40 @@ export async function GET(
 ) {
   try {
     const { path } = await params;
-    if (!path || path.length < 3) {
+    if (!path || path.length < 2) {
       return new NextResponse("Invalid path", { status: 400 });
     }
 
-    const [collectionId, recordId, filename] = path;
+    let collectionId: string;
+    let recordId: string;
+    let filename: string;
+
+    if (path.length === 2) {
+      // Legacy or internal shorthand: /api/proxy/file/[recordId]/[filename]
+      collectionId = "cloud";
+      [recordId, filename] = path;
+    } else {
+      // Standard: /api/proxy/file/[collectionId]/[recordId]/[filename]
+      [collectionId, recordId, filename] = path;
+    }
 
     // 1. Verify Session
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     const user = session?.value ? JSON.parse(session.value) : null;
 
-    if (!user || !user.id) {
-      return new NextResponse("Unauthorized", { status: 401 });
-    }
-
     // 2. Admin Client (Cached)
     const pb = await getAdminClient();
 
-    // 3. Ownership Check (Optional but recommended)
+    // 3. Ownership and Sharing Check
     let record;
     try {
       record = await pb.collection(collectionId).getOne(recordId);
-      // Check if owner is user OR if shared with "TEAM_MONAD" OR shared publicly (if implemented)
+
+      const isShared = record.is_shared === true || record.is_shared === "true";
+      const isOwner =
+        user && (record.owner === user.id || record.owner === user.email);
+
       // Team Check: Resolve Team User ID
       let teamId = "";
       try {
@@ -44,17 +55,19 @@ export async function GET(
       } catch {
         /* ignore */
       }
+      const isTeam = user && record.owner === teamId && teamId !== "";
 
-      const isOwner = record.owner === user.id || record.owner === user.email;
-      const isTeam = record.owner === teamId && teamId !== "";
-
-      // For thumbnails, maybe we can be slightly lenient if we trust the UI not to leak IDs?
-      // But strictly:
-      if (!isOwner && !isTeam) {
-        // Check sharing status if needed (e.g. valid shared link access)
-        // For now, simple strict check.
+      // Access logic:
+      // Allow if:
+      // 1. It's shared (is_shared: true)
+      // 2. User is owner
+      // 3. User is part of team
+      if (!isShared && !isOwner && !isTeam) {
+        if (!user) {
+          return new NextResponse("Unauthorized", { status: 401 });
+        }
         console.error(
-          `Forbidden access: User ${user.id} is not owner of ${recordId}`
+          `Forbidden access: User ${user.id} is not owner of ${recordId} (protected)`
         );
         return new NextResponse("Forbidden", { status: 403 });
       }
@@ -104,29 +117,16 @@ export async function GET(
     }
 
     // 5. Stream File (Stitching Logic)
-    // Check for split parts
     const files = Array.isArray(record.file) ? record.file : [record.file];
-
-    // Sort files just in case
     files.sort();
-
-    // Determine if we are serving a split file
-    // Condition: Multiple files exist AND they follow the pattern .partXXX
-    // If the requested filename is one of them, we serve the WHOLE stitched file.
-    // Or if the user requested the "base" name? But URL usually includes specific filename from UI.
-    // The UI currently links to `file.file[0]`.
-    // So if user clicks `movie.mp4.part001`, we should detect it's a part and serve the whole thing.
 
     const isSplitPart = (name: string) => /\.part\d+/.test(name);
     const hasSplitParts = files.length > 1 && files.every(isSplitPart);
 
     let streamBody: any;
-
-    // Allow overriding filename via query param (for preserving Korean names)
     const queryFilename = request.nextUrl.searchParams.get("filename");
     const thumb = request.nextUrl.searchParams.get("thumb");
 
-    // Base filename logic
     let cleanName =
       queryFilename ||
       record.name ||
@@ -134,28 +134,12 @@ export async function GET(
     let contentType: string | null = null;
 
     if (hasSplitParts) {
-      // Numerical Sort to ensure correct binary order
       const getPartNum = (name: string) => {
         const match = name.match(/\.part(\d+)/);
         return match ? parseInt(match[1], 10) : 0;
       };
       files.sort((a, b) => getPartNum(a) - getPartNum(b));
 
-      // Completion Check: Verify if all chunks are present
-      const maxPartNum = Math.max(...files.map(getPartNum));
-      if (files.length < maxPartNum) {
-        console.error(
-          `[Proxy] record ${recordId} is missing parts! Found ${files.length}, expected ${maxPartNum}.`
-        );
-      }
-
-      console.log(
-        `[Proxy] Stitching Mode Active for record ${recordId} (${files.length} parts)`
-      );
-      // Stitching Mode
-      cleanName = cleanName.replace(/\.part\d+.*$/, "");
-
-      // Generate a file token for protected file access
       const fileToken = await pb.files.getToken();
       const fileUrls = files.map((f: string) =>
         pb.files.getURL(record, f, { token: fileToken })
@@ -166,15 +150,9 @@ export async function GET(
         { Authorization: pb.authStore.token },
         files
       );
-
-      // Content Type sniffing?
-      // We might default to octet-stream or try to guess from cleanName ext
+      cleanName = cleanName.replace(/\.part\d+.*$/, "");
     } else {
-      // Single File Mode
-      // Generate a file token for protected file access
       const fileToken = await pb.files.getToken();
-
-      // Forward 'thumb' parameter to PocketBase
       const fileUrl = pb.files.getURL(
         record,
         filename,
@@ -189,25 +167,15 @@ export async function GET(
           status: response.status,
         });
       streamBody = response.body;
-
-      // If generic content type, we might want to sniff from response?
-      // But we reuse the cleanName logic below.
-      if (!contentType)
-        contentType =
-          response.headers.get("content-type") || "application/octet-stream";
+      contentType =
+        response.headers.get("content-type") || "application/octet-stream";
     }
 
-    // Common Cleanup & Headers
     const ext = cleanName.split(".").pop()?.toLowerCase();
-
-    // ... Content Type Logic (re-using existing block structure)
     if (!contentType || contentType === "application/octet-stream") {
-      if (thumb) {
-        // Thumbnails are always images (usually JPEG in PocketBase)
-        contentType = "image/jpeg";
-      } else if (ext === "pdf") {
-        contentType = "application/pdf";
-      } else if (
+      if (thumb) contentType = "image/jpeg";
+      else if (ext === "pdf") contentType = "application/pdf";
+      else if (
         ["jpg", "jpeg", "png", "gif", "webp", "svg"].includes(ext || "")
       ) {
         contentType = `image/${ext === "svg" ? "svg+xml" : ext}`;
@@ -220,30 +188,22 @@ export async function GET(
       }
     }
 
-    // Final Fallback if still null/empty (though logic above tries to set it)
     const finalContentType = contentType || "application/octet-stream";
-
     const isRiskyType = [
       "text/html",
       "text/htm",
       "image/svg+xml",
       "application/javascript",
-      "application/x-javascript",
-      "application/x-php",
-      "text/javascript",
     ].includes(finalContentType.toLowerCase());
-
     const isPreviewable =
       !isRiskyType &&
       (finalContentType.startsWith("image/") ||
         finalContentType.startsWith("video/") ||
         finalContentType === "application/pdf" ||
         finalContentType.startsWith("text/"));
-
     const dispositionType = isPreviewable ? "inline" : "attachment";
     const encodedName = encodeURIComponent(cleanName);
 
-    // Apply Throttling (5MB/s) - Skip for thumbnails for low overhead
     const BANDWIDTH_LIMIT = 1024 * 1024 * 5;
     if (streamBody && !thumb) {
       streamBody = makeThrottledStream(streamBody, BANDWIDTH_LIMIT);
@@ -258,13 +218,11 @@ export async function GET(
       "Last-Modified": fileLastModified,
       ETag: etag,
       "Content-Disposition": `${dispositionType}; filename="${encodedName}"; filename*=UTF-8''${encodedName}`,
-      "Accept-Ranges": "none",
       "X-Content-Type-Options": "nosniff",
       "Content-Security-Policy":
         "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; sandbox",
     };
 
-    // Include Content-Length if available (important for download progress)
     if (record.size && !thumb) {
       headers["Content-Length"] = record.size.toString();
     }
@@ -276,7 +234,6 @@ export async function GET(
   }
 }
 
-// Helper: Stitched Stream
 function makeStitchedStream(
   urls: string[],
   headers: HeadersInit,
@@ -284,12 +241,9 @@ function makeStitchedStream(
 ): ReadableStream<Uint8Array> {
   let currentIdx = 0;
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-
   return new ReadableStream({
     async pull(controller) {
-      // Loop until we enqueue something or close
       while (true) {
-        // If no reader active, open next one
         if (!reader) {
           if (currentIdx >= urls.length) {
             controller.close();
@@ -301,30 +255,21 @@ function makeStitchedStream(
             if (!res.ok)
               throw new Error(`Part fetch failed: ${filesDebug[currentIdx]}`);
             if (!res.body) throw new Error("No body");
-
-            console.log(
-              `[Proxy] Stitching part ${currentIdx + 1}/${urls.length}: ${
-                res.headers.get("content-length") || "unknown"
-              } bytes`
-            );
             reader = res.body.getReader();
           } catch (e) {
             controller.error(e);
             return;
           }
         }
-
-        // Read from current
         try {
           const { done, value } = await reader.read();
           if (done) {
-            // Current stream finished
             reader = null;
             currentIdx++;
-            continue; // Loop to next source immediately
+            continue;
           }
           controller.enqueue(value);
-          return; // Done with this pull
+          return;
         } catch (e) {
           controller.error(e);
           return;
@@ -332,30 +277,19 @@ function makeStitchedStream(
       }
     },
     cancel(reason) {
-      if (reader) {
-        reader.cancel(reason);
-      }
+      if (reader) reader.cancel(reason);
     },
   });
 }
 
 function makeThrottledStream(
-  inputStream: ReadableStream<any>,
+  inputStream: any,
   bytesPerSecond: number
 ): ReadableStream<Uint8Array> {
-  // Safeguard: Check if it's a Web Stream
-  if (typeof inputStream.getReader !== "function") {
-    // If not a web stream (e.g. Node stream), bypass throttling to prevent crash
-    // Or we could try Readable.toWeb(inputStream) if imported?
-    // For now, bypass is safer to restore functionality.
-    console.warn("Skipping throttling: inputStream is not a Web Stream");
-    return inputStream;
-  }
-
+  if (typeof inputStream.getReader !== "function") return inputStream;
   const reader = inputStream.getReader();
   let start = Date.now();
   let bytesSent = 0;
-
   return new ReadableStream({
     async pull(controller) {
       const { done, value } = await reader.read();
@@ -363,16 +297,13 @@ function makeThrottledStream(
         controller.close();
         return;
       }
-
       bytesSent += value.byteLength;
       const elapsedSeconds = (Date.now() - start) / 1000;
       const expectedSeconds = bytesSent / bytesPerSecond;
-
       if (elapsedSeconds < expectedSeconds) {
         const delay = (expectedSeconds - elapsedSeconds) * 1000;
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
-
       controller.enqueue(value);
     },
     cancel() {

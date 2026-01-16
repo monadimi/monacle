@@ -42,13 +42,18 @@ import {
   Quote,
   Trash2,
   FileText,
-  ChevronDown
+  ChevronDown,
+  PlusCircle
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { updateDoc, deleteDoc, toggleSharing } from "@/app/actions/cowork";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import pb from "@/lib/pocketbase";
+import { Step } from "prosemirror-transform";
+
+import { Page, CustomDoc } from "@/lib/tiptap-paging";
 
 const lowlight = createLowlight(common);
 
@@ -60,22 +65,45 @@ interface Doc {
   updated: string;
   is_shared: boolean;
   share_type: string;
+  share_team?: boolean;
+  tVersion: number;
+  lastClientId: string;
   parent_id?: string;
 }
 
-export default function DocEditor({ docId, initialData }: { docId: string, initialData: Doc }) {
+const ensurePaging = (html: string) => {
+  if (!html) return '<div data-type="page"><p></p></div>';
+  if (!html.includes('data-type="page"')) {
+    return `<div data-type="page">${html}</div>`;
+  }
+  return html;
+};
+
+export default function DocEditor({ docId, initialData, readOnly = false, currentUser = null }: { docId: string, initialData: Doc, readOnly?: boolean, currentUser?: any }) {
   const router = useRouter();
+  const [clientId] = useState(() => typeof window !== 'undefined' ? crypto.randomUUID() : "server");
   const [title, setTitle] = useState(initialData.title);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [isShared, setIsShared] = useState(initialData.is_shared);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [shareType, setShareType] = useState<"view" | "edit">(initialData.share_type === "edit" ? "edit" : "view");
+  const [shareTeam, setShareTeam] = useState(!!initialData.share_team);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(!readOnly);
+  const [activeEditors, setActiveEditors] = useState<Array<{ userId: string; name: string; avatarUrl?: string; updated: string }>>([]);
+
+  const [tVersion, setTVersion] = useState(initialData.tVersion || 0);
+  const [pageCount, setPageCount] = useState(1);
+  const docHeightRef = useRef(1056);
   const [docHeight, setDocHeight] = useState(1056);
   const contentRef = useRef<HTMLDivElement>(null);
+  const pendingStepsRef = useRef<any[]>([]);
+  const isApplyingRemoteRef = useRef(false);
 
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({ heading: false, codeBlock: false }),
+      CustomDoc,
+      Page,
+      StarterKit.configure({ heading: false, codeBlock: false, document: false }),
       Heading.configure({ levels: [1, 2, 3] }),
       Underline,
       TextStyle,
@@ -88,62 +116,452 @@ export default function DocEditor({ docId, initialData }: { docId: string, initi
       Image.configure({ HTMLAttributes: { class: "rounded-2xl max-w-full my-8" } }),
       Placeholder.configure({ placeholder: "내용을 입력하세요..." }),
     ],
-    content: initialData.content,
+    content: ensurePaging(initialData.content),
     immediatelyRender: false,
+    editable: !readOnly && !!currentUser,
     editorProps: {
       attributes: {
-        class: "prose prose-slate max-w-none focus:outline-none min-h-[1056px] py-24 px-16 md:px-24 w-full max-w-[816px] mx-auto",
+        class: cn(
+          "prose prose-slate max-w-none focus:outline-none w-full max-w-[816px] mx-auto",
+          readOnly && "cursor-default"
+        ),
       },
-      handleKeyDown: (view, event) => {
-        // Force update on certain keys to ensure toolbar button states update
-        if (['b', 'i', 'u'].includes(event.key.toLowerCase()) && (event.ctrlKey || event.metaKey)) {
-          setTimeout(() => updateHeight(), 0);
-        }
+       handleKeyDown: (view, event) => {
+        if (readOnly) return true;
+        // Optimization: Handle enter/delete for pagination
         return false;
       }
     },
     onUpdate: ({ editor }) => {
-      debouncedSave(editor.getHTML());
-      updateHeight();
+      if (isApplyingRemoteRef.current) return;
+      // updateHeight(); // Removed in favor of paging height
+      if (!readOnly) {
+        schedulePagination();
+        debouncedSave({ content: editor.getHTML() });
+      }
     },
-    onTransaction: () => {
-      // Force re-render of toolbar buttons on selection/transaction
-      setForcedUpdate(prev => prev + 1);
-    }
   });
 
-  const [forcedUpdate, setForcedUpdate] = useState(0);
+  const updatePageCount = useCallback(() => {
+    if (!editor) return;
+    const nextCount = editor.state.doc.childCount || 1;
+    setPageCount((prev) => (prev === nextCount ? prev : nextCount));
+  }, [editor]);
 
-  const updateHeight = useCallback(() => {
-    if (contentRef.current) {
-      const height = contentRef.current.scrollHeight;
-      setDocHeight(Math.max(1056, height));
+  const buildAvatarUrl = useCallback((user?: { id?: string; avatar?: string }) => {
+    if (!user?.avatar || !user?.id) return undefined;
+    if (user.avatar.startsWith("http")) return user.avatar;
+    return `https://monadb.snowman0919.site/api/files/users/${user.id}/${user.avatar}`;
+  }, []);
+
+  const buildEditorChip = useCallback((user: any) => ({
+    userId: user.id,
+    name: user.name || user.email || "User",
+    avatarUrl: buildAvatarUrl({ id: user.id, avatar: user.avatar }),
+    updated: new Date().toISOString(),
+  }), [buildAvatarUrl]);
+
+  const runRemoteApply = useCallback((fn: () => void) => {
+    isApplyingRemoteRef.current = true;
+    fn();
+    setTimeout(() => { isApplyingRemoteRef.current = false; }, 0);
+  }, []);
+
+  // Real-time Sync & Save Refs
+  const titleRef = useRef(title);
+  const saveStatusRef = useRef(saveStatus);
+  const versionRef = useRef(tVersion);
+  const pendingUpdates = useRef<{ title?: string, content?: string }>({});
+  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  
+  useEffect(() => { titleRef.current = title; }, [title]);
+  useEffect(() => { saveStatusRef.current = saveStatus; }, [saveStatus]);
+  useEffect(() => { versionRef.current = tVersion; }, [tVersion]);
+  useEffect(() => {
+    if (currentUser?.token) {
+      pb.authStore.save(currentUser.token, currentUser);
     }
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!editor || readOnly) return;
+    const handleTransaction = ({ transaction }: { transaction: any }) => {
+      if (!transaction.docChanged) return;
+      if (isApplyingRemoteRef.current) return;
+      if (!transaction.steps?.length) return;
+      pendingStepsRef.current.push(...transaction.steps.map((step: any) => step.toJSON()));
+    };
+    editor.on("transaction", handleTransaction);
+    return () => {
+      editor.off("transaction", handleTransaction);
+    };
+  }, [editor, readOnly]);
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    const localEditor = buildEditorChip(currentUser);
+    setActiveEditors((prev) => {
+      const filtered = prev.filter((item) => item.userId !== localEditor.userId);
+      return [localEditor, ...filtered];
+    });
+
+    const mergeEditors = (items: Array<{ userId: string; name: string; avatarUrl?: string; updated: string }>) => {
+      const deduped = new Map<string, { userId: string; name: string; avatarUrl?: string; updated: string }>();
+      for (const item of items) {
+        if (!deduped.has(item.userId)) {
+          deduped.set(item.userId, item);
+        }
+      }
+      return Array.from(deduped.values());
+    };
+
+    const fetchPresenceList = async () => {
+      try {
+        const res = await fetch(`/api/presence?docId=${docId}`, {
+          method: "GET",
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const next = (data.items || []).map((record: any) => ({
+          userId: record.user_id,
+          name: record.name || "User",
+          avatarUrl: buildAvatarUrl({ id: record.user_id, avatar: record.avatar }),
+          updated: record.updated,
+        }));
+        const merged = mergeEditors([localEditor, ...next]);
+        setActiveEditors(merged);
+      } catch {
+        // ignore
+      }
+    };
+
+    const upsertPresence = async () => {
+      try {
+        await fetch("/api/presence", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ docId }),
+        });
+      } catch {
+        // ignore
+      }
+    };
+
+    const cleanupStale = () => {
+      const cutoff = Date.now() - 30000;
+      setActiveEditors((prev) =>
+        mergeEditors(prev).filter((item) => {
+          const updatedAt = Date.parse(item.updated || "");
+          return Number.isNaN(updatedAt) || updatedAt >= cutoff;
+        })
+      );
+    };
+
+    fetchPresenceList();
+    upsertPresence();
+
+    const heartbeat = setInterval(upsertPresence, 12000);
+    const listRefresh = setInterval(fetchPresenceList, 6000);
+    const cleanupTimer = setInterval(cleanupStale, 15000);
+
+    return () => {
+      clearInterval(heartbeat);
+      clearInterval(listRefresh);
+      clearInterval(cleanupTimer);
+      fetch(`/api/presence?docId=${docId}`, { method: "DELETE", keepalive: true }).catch(() => {});
+    };
+  }, [currentUser, docId, buildAvatarUrl, buildEditorChip]);
+
+  // Save Protection (Data Loss Prevention)
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (saveStatus !== "saved") {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [saveStatus]);
+
+  const debouncedSave = useCallback((updates: { title?: string, content?: string }) => {
+    setSaveStatus("saving");
+    pendingUpdates.current = { ...pendingUpdates.current, ...updates };
+    
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+
+    saveTimerRef.current = setTimeout(async () => {
+      const currentUpdates = { ...pendingUpdates.current };
+      pendingUpdates.current = {}; 
+      
+      const nextVersion = versionRef.current + 1;
+      const res = await updateDoc(docId, { 
+        ...currentUpdates,
+        tVersion: nextVersion,
+        lastClientId: clientId
+      });
+
+      if (res.success) {
+        setSaveStatus("saved");
+        setTVersion(nextVersion);
+        pendingStepsRef.current = [];
+      } else if ((res as any).conflict) {
+        setSaveStatus("saving");
+        const latest = (res as any).latestDoc;
+        const stepsToReapply = [...pendingStepsRef.current];
+        pendingStepsRef.current = [];
+
+        runRemoteApply(() => {
+          editor.commands.setContent(ensurePaging(latest.content), false);
+        });
+        setTVersion(latest.tVersion);
+
+        if (stepsToReapply.length) {
+          const { state, view } = editor;
+          let tr = state.tr;
+          let appliedSteps = 0;
+          const reappliedSteps: any[] = [];
+          for (const stepJson of stepsToReapply) {
+            try {
+              const step = Step.fromJSON(state.schema, stepJson);
+              const result = step.apply(tr.doc);
+              if (result.doc) {
+                tr = tr.step(step);
+                appliedSteps += 1;
+                reappliedSteps.push(stepJson);
+              }
+            } catch {
+              // Skip invalid steps on conflict reapply
+            }
+          }
+          if (appliedSteps > 0) {
+            runRemoteApply(() => {
+              view.dispatch(tr);
+            });
+          }
+          pendingStepsRef.current = reappliedSteps;
+        }
+
+        debouncedSave({ content: editor.getHTML() });
+      } else {
+        setSaveStatus("error");
+      }
+      saveTimerRef.current = null;
+    }, 3000);
+  }, [docId, clientId, editor, runRemoteApply]);
+
+  const isPagingRef = useRef(false);
+  const lastSplitRef = useRef<{ pos: number, time: number } | null>(null);
+  const paginationFrameRef = useRef<number | null>(null);
+
+  const getCurrentPageInfo = useCallback(() => {
+    if (!editor) return null;
+    const { $from } = editor.state.selection;
+    for (let depth = $from.depth; depth > 0; depth--) {
+      const node = $from.node(depth);
+      if (node.type.name === "page") {
+        return { node, pos: $from.before(depth) };
+      }
+    }
+    return null;
+  }, [editor]);
+
+  const isPageEmpty = useCallback((node: any) => {
+    if (node.childCount !== 1) return false;
+    const child = node.firstChild;
+    return !!child && child.isTextblock && child.content.size === 0;
+  }, []);
+
+  // Advanced Pagination Logic
+  const handlePagination = useCallback(async () => {
+    if (!editor || readOnly || isPagingRef.current) return;
+
+    // Check if we just tried splitting nearby to prevent rapid loops
+    const now = Date.now();
+    if (lastSplitRef.current && now - lastSplitRef.current.time < 500) return;
+
+    const MAX_HEIGHT = 930; // Reliable threshold for A4 content area
+    let docChanged = false;
+
+    isPagingRef.current = true;
+    try {
+      const pageInfo = getCurrentPageInfo();
+      if (!pageInfo) return;
+
+      const { node, pos } = pageInfo;
+      const dom = editor.view.nodeDOM(pos) as HTMLElement | null;
+      if (!dom) return;
+
+      let totalContentHeight = 0;
+      let splitPos = -1;
+      const children = Array.from(dom.childNodes);
+      for (let i = 0; i < children.length; i++) {
+        const child = children[i] as HTMLElement;
+        const childHeight = child.offsetHeight || 0;
+
+        // Skip style calculations if already over split pos to save perf
+        let fullHeight = childHeight;
+        if (splitPos === -1) {
+          const style = window.getComputedStyle(child);
+          const margins = parseFloat(style.marginTop) + parseFloat(style.marginBottom);
+          fullHeight += margins;
+        }
+
+        if (totalContentHeight + fullHeight > MAX_HEIGHT && splitPos === -1) {
+          splitPos = pos + 1;
+          for (let j = 0; j < i; j++) {
+            splitPos += node.child(j).nodeSize;
+          }
+        }
+        totalContentHeight += fullHeight;
+      }
+
+      // Only split if content actually overflows and we have a valid split point
+      // Also check if we're not just splitting at the same spot repeatedly
+      if (totalContentHeight > MAX_HEIGHT + 10 && splitPos !== -1 && splitPos < pos + node.nodeSize - 1) {
+        // PROTECTION: If there's only one child and it overflows, splitting at the start of it
+        // will just push that one child to the next page, causing an infinite loop.
+        if (children.length <= 1) return;
+
+        if (lastSplitRef.current?.pos === splitPos && now - lastSplitRef.current.time < 2000) {
+          return;
+        }
+
+        const pageType = editor.state.schema.nodes.page;
+        if (pageType) {
+          const tr = editor.state.tr.split(splitPos, 1);
+          editor.view.dispatch(tr);
+        }
+
+        lastSplitRef.current = { pos: splitPos, time: Date.now() };
+        docChanged = true;
+      }
+
+      if (!docChanged) {
+        const doc = editor.state.doc;
+        while (doc.childCount > 1) {
+          const lastIndex = doc.childCount - 1;
+          const lastNode = doc.child(lastIndex);
+          if (lastNode.type.name !== "page" || !isPageEmpty(lastNode)) break;
+          let posCursor = 0;
+          for (let i = 0; i < lastIndex; i++) {
+            posCursor += doc.child(i).nodeSize;
+          }
+          editor.commands.deleteRange({ from: posCursor, to: posCursor + lastNode.nodeSize });
+          docChanged = true;
+          break;
+        }
+      }
+
+      if (docChanged) {
+        debouncedSave({ content: editor.getHTML() });
+      }
+    } finally {
+      // Small delay before unlocking to allow DOM to settle
+      setTimeout(() => { isPagingRef.current = false; }, 100);
+    }
+  }, [editor, readOnly, debouncedSave, getCurrentPageInfo, isPageEmpty]);
+
+  const schedulePagination = useCallback(() => {
+    if (paginationFrameRef.current !== null) return;
+    paginationFrameRef.current = window.requestAnimationFrame(() => {
+      paginationFrameRef.current = null;
+      handlePagination();
+    });
+  }, [handlePagination]);
+
+  const addPage = useCallback(() => {
+    if (!editor) return;
+    editor.chain()
+      .focus()
+      .insertContentAt(editor.state.doc.content.size, { type: 'page', content: [{ type: 'paragraph' }] })
+      .run();
+  }, [editor]);
+
+  useEffect(() => {
+    if (!editor) return;
+    updatePageCount();
+    editor.on("update", updatePageCount);
+    return () => {
+      editor.off("update", updatePageCount);
+    };
+  }, [editor, updatePageCount]);
+
+  useEffect(() => {
+    return () => {
+      if (paginationFrameRef.current !== null) {
+        cancelAnimationFrame(paginationFrameRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
-    if (editor) {
-      updateHeight();
-      const observer = new ResizeObserver(updateHeight);
-      if (contentRef.current) observer.observe(contentRef.current);
-      return () => observer.disconnect();
+    if (!editor) return; 
+    
+    // Subscribe to all changes to this document
+    pb.collection("docs").subscribe(docId, (e) => {
+      if (e.action === "update") {
+        const remote = e.record;
+        if (remote.lastClientId === clientId) return;
+        if (remote.tVersion <= versionRef.current) return;
+
+        if (remote.title !== titleRef.current) setTitle(remote.title);
+
+        const currentHTML = editor.getHTML();
+        const shouldSync = readOnly || (remote.content !== currentHTML && saveStatusRef.current === "saved");
+
+        if (shouldSync && remote.content !== currentHTML) {
+          const { from, to } = editor.state.selection;
+          const stepsToReapply = pendingStepsRef.current.length ? [...pendingStepsRef.current] : [];
+          runRemoteApply(() => {
+            editor.commands.setContent(ensurePaging(remote.content), false);
+          });
+          if (stepsToReapply.length) {
+            const { state, view } = editor;
+            let tr = state.tr;
+            let appliedSteps = 0;
+            for (const stepJson of stepsToReapply) {
+              try {
+                const step = Step.fromJSON(state.schema, stepJson);
+                const result = step.apply(tr.doc);
+                if (result.doc) {
+                  tr = tr.step(step);
+                  appliedSteps += 1;
+                }
+              } catch {
+                // Skip invalid steps on remote sync
+              }
+            }
+            if (appliedSteps > 0) {
+              runRemoteApply(() => {
+                view.dispatch(tr);
+              });
+            }
+          }
+          if (!readOnly) {
+            try { editor.commands.setTextSelection({ from, to }); } catch { }
+          }
+          setTVersion(remote.tVersion);
+        }
+      }
+    });
+
+    return () => { pb.collection("docs").unsubscribe(docId); };
+  }, [docId, editor, readOnly, clientId, runRemoteApply]);
+
+  const handleToggleShare = async (forceType?: "view" | "edit", forceTeam?: boolean) => {
+    const nextShared = !isShared || forceType !== undefined || forceTeam !== undefined;
+    const nextType = forceType || shareType;
+    const nextTeam = forceTeam !== undefined ? forceTeam : shareTeam;
+    
+    const res = await toggleSharing("docs", docId, nextShared, nextType, nextTeam);
+    if (res.success) {
+      setIsShared(nextShared);
+      setShareType(nextType);
+      setShareTeam(nextTeam);
     }
-  }, [editor, updateHeight]);
-
-  const debouncedSave = useCallback((content: string) => {
-    setSaveStatus("saving");
-    const timer = setTimeout(async () => {
-      const res = await updateDoc(docId, { content });
-      if (res.success) setSaveStatus("saved");
-      else setSaveStatus("error");
-    }, 2000);
-    return () => clearTimeout(timer);
-  }, [docId]);
-
-  const handleToggleShare = async () => {
-    const newShared = !isShared;
-    const res = await toggleSharing("docs", docId, newShared);
-    if (res.success) setIsShared(newShared);
   };
 
   const handleDelete = async () => {
@@ -171,7 +589,7 @@ export default function DocEditor({ docId, initialData }: { docId: string, initi
         const res = await fetch("/api/drive/upload", { method: "POST", body: formData });
         const data = await res.json();
         if (data.record?.id) {
-          const proxiedUrl = `/api/proxy/file/${data.record.id}/${file.name}`;
+          const proxiedUrl = `${window.location.origin}/api/proxy/file/cloud/${data.record.id}/${file.name}`;
           editor.chain().focus().setImage({ src: proxiedUrl }).run();
           setSaveStatus("saved");
         }
@@ -194,16 +612,15 @@ export default function DocEditor({ docId, initialData }: { docId: string, initi
     editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
   };
 
-  const pageHeight = 1122;
-  const gapHeight = 40;
-  const numPages = Math.max(1, Math.ceil((docHeight + 48) / pageHeight));
-
   const shareUrl = typeof window !== "undefined" ? `${window.location.origin}/share/doc/${docId}` : "";
 
   if (!editor) return null;
 
+  // Track page nodes for shortcuts
+  const pageNodesCount = pageCount;
+
   return (
-    <div className="flex w-full h-[100dvh] bg-[#F8FAFC] overflow-hidden relative">
+    <div className="flex w-full h-[100dvh] bg-[#F1F5F9] overflow-hidden relative">
       {/* Sidebar */}
       <aside className={cn(
         "bg-white border-r border-slate-200 flex flex-col transition-all duration-300 z-30 shrink-0 h-full overflow-hidden",
@@ -226,12 +643,12 @@ export default function DocEditor({ docId, initialData }: { docId: string, initi
           <div className="space-y-2">
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">페이지 바로가기</div>
             <div className="grid grid-cols-1 gap-1">
-              {Array.from({ length: numPages }).map((_, i) => (
+              {Array.from({ length: pageNodesCount }).map((_, i) => (
                 <button
                   key={i}
                   onClick={() => {
-                    const mainElement = document.getElementById("editor-main");
-                    if (mainElement) mainElement.scrollTo({ top: i * (pageHeight + gapHeight), behavior: "smooth" });
+                    const pageEl = document.querySelectorAll('.a4-page')[i];
+                    if (pageEl) pageEl.scrollIntoView({ behavior: "smooth" });
                   }}
                   className="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-50 transition-all group text-left"
                 >
@@ -262,108 +679,147 @@ export default function DocEditor({ docId, initialData }: { docId: string, initi
                 <input
                   type="text"
                   value={title}
+                  readOnly={readOnly}
                   onChange={(e) => {
+                    if (readOnly) return;
                     setTitle(e.target.value);
-                    updateDoc(docId, { title: e.target.value });
+                    debouncedSave({ title: e.target.value });
                   }}
-                  className="font-bold text-slate-900 focus:outline-none bg-transparent h-6 text-sm w-full max-w-[300px]"
+                  className={cn(
+                    "font-bold text-slate-900 focus:outline-none bg-transparent h-6 text-sm w-full max-w-[300px]",
+                    readOnly ? "cursor-default" : "cursor-text"
+                  )}
                   placeholder="제목 없는 문서"
                 />
                 <div className="flex items-center gap-2 text-[10px] text-slate-400 font-medium">
-                  {saveStatus === "saving" && <span className="flex items-center gap-1"><Save className="w-2.5 h-2.5 animate-pulse" /> 저장 중</span>}
-                  {saveStatus === "saved" && <span className="flex items-center gap-1 text-emerald-500 font-bold"><CheckCircle2 className="w-2.5 h-2.5" /> 저장됨</span>}
-                  <span>•</span>
-                  <span className="text-slate-400">{numPages}쪽</span>
+                  {!readOnly && (
+                    <>
+                      {saveStatus === "saving" && <span className="flex items-center gap-1"><Save className="w-2.5 h-2.5 animate-pulse" /> 저장 중</span>}
+                      {saveStatus === "saved" && <span className="flex items-center gap-1 text-emerald-500 font-bold"><CheckCircle2 className="w-2.5 h-2.5" /> 저장됨</span>}
+                      {saveStatus === "error" && <span className="flex items-center gap-1 text-red-500 font-bold"><CloudOff className="w-2.5 h-2.5" /> 저장 오류</span>}
+                      <span>•</span>
+                    </>
+                  )}
+                  <span className="text-slate-400">{pageNodesCount}쪽</span>
                 </div>
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <button
-                onClick={() => setIsShareOpen(true)}
-                className={cn(
-                  "flex items-center gap-2 px-5 py-2 rounded-2xl font-bold text-xs transition-all",
-                  isShared ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                )}
-              >
-                <Share2 className="w-4 h-4" />
-                {isShared ? "공유 중" : "공유"}
-              </button>
-              <button onClick={handleDelete} className="p-2.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all">
-                <Trash2 className="w-4 h-4" />
-              </button>
+              {activeEditors.length > 0 && (
+                <div className="flex items-center gap-2">
+                  {activeEditors.slice(0, 3).map((editor) => (
+                    <div
+                      key={editor.userId}
+                      className="flex items-center gap-2 px-2 py-1 rounded-full bg-slate-50 border border-slate-200 text-[10px] font-bold text-slate-600"
+                      title={editor.name}
+                    >
+                      <div className="w-6 h-6 rounded-full bg-slate-200 overflow-hidden flex items-center justify-center text-[10px] font-bold text-slate-600">
+                        {editor.avatarUrl ? (
+                          <img src={editor.avatarUrl} alt={editor.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <span>{editor.name?.[0]?.toUpperCase() || "U"}</span>
+                        )}
+                      </div>
+                      <span className="max-w-[80px] truncate">{editor.name}</span>
+                    </div>
+                  ))}
+                  {activeEditors.length > 3 && (
+                    <div className="px-2 py-1 rounded-full bg-slate-100 text-[10px] font-bold text-slate-500 border border-slate-200">
+                      +{activeEditors.length - 3}
+                    </div>
+                  )}
+                </div>
+              )}
+              {!readOnly ? (
+                <>
+                  <button
+                    onClick={() => setIsShareOpen(true)}
+                    className={cn(
+                      "flex items-center gap-2 px-5 py-2 rounded-2xl font-bold text-xs transition-all",
+                      isShared ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    )}
+                  >
+                    <Share2 className="w-4 h-4" />
+                    {isShared ? "공유 중" : "공유"}
+                  </button>
+                  <button onClick={handleDelete} className="p-2.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </>
+              ) : (
+                <div className="px-5 py-2 rounded-2xl bg-indigo-50 text-indigo-600 font-bold text-xs flex items-center gap-2">
+                  <FileText className="w-4 h-4" />
+                  읽기 전용
+                </div>
+              )}
             </div>
           </header>
 
           {/* Toolbar */}
-          <div className="h-12 bg-white border-b border-slate-100 p-1 flex items-center gap-1 px-6 z-50">
-            <button onClick={() => editor.chain().focus().undo().run()} disabled={!editor.can().undo()} className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 disabled:opacity-20"><Undo className="w-4 h-4" /></button>
-            <button onClick={() => editor.chain().focus().redo().run()} disabled={!editor.can().redo()} className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 disabled:opacity-20"><Redo className="w-4 h-4" /></button>
-            <div className="w-px h-5 bg-slate-100 mx-2" />
+          {!readOnly && (
+            <div className="h-12 bg-white border-b border-slate-100 p-1 flex items-center gap-1 px-6 z-50">
+              <button onClick={() => editor.chain().focus().undo().run()} disabled={!editor.can().undo()} className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 disabled:opacity-20"><Undo className="w-4 h-4" /></button>
+              <button onClick={() => editor.chain().focus().redo().run()} disabled={!editor.can().redo()} className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 disabled:opacity-20"><Redo className="w-4 h-4" /></button>
+              <div className="w-px h-5 bg-slate-100 mx-2" />
 
-            <button onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("heading", { level: 1 }) ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><Heading1 className="w-4 h-4" /></button>
-            <button onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("heading", { level: 2 }) ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><Heading2 className="w-4 h-4" /></button>
-            <button onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("heading", { level: 3 }) ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><Heading3 className="w-4 h-4" /></button>
+              <button onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("heading", { level: 1 }) ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><Heading1 className="w-4 h-4" /></button>
+              <button onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("heading", { level: 2 }) ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><Heading2 className="w-4 h-4" /></button>
+              <button onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("heading", { level: 3 }) ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><Heading3 className="w-4 h-4" /></button>
 
-            <div className="w-px h-5 bg-slate-100 mx-2" />
-            <button onClick={() => editor.chain().focus().toggleBold().run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("bold") ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><BoldIcon className="w-4 h-4" /></button>
-            <button onClick={() => editor.chain().focus().toggleItalic().run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("italic") ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><ItalicIcon className="w-4 h-4" /></button>
-            <button onClick={() => editor.chain().focus().toggleUnderline().run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("underline") ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><UnderlineIcon className="w-4 h-4" /></button>
-            <button onClick={() => editor.chain().focus().toggleHighlight().run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("highlight") ? "bg-amber-400 text-amber-950" : "hover:bg-slate-50 text-slate-400")}><Highlighter className="w-4 h-4" /></button>
+              <div className="w-px h-5 bg-slate-100 mx-2" />
+              <button onClick={() => editor.chain().focus().toggleBold().run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("bold") ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><BoldIcon className="w-4 h-4" /></button>
+              <button onClick={() => editor.chain().focus().toggleItalic().run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("italic") ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><ItalicIcon className="w-4 h-4" /></button>
+              <button onClick={() => editor.chain().focus().toggleUnderline().run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("underline") ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><UnderlineIcon className="w-4 h-4" /></button>
+              <button onClick={() => editor.chain().focus().toggleHighlight().run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("highlight") ? "bg-amber-400 text-amber-950" : "hover:bg-slate-50 text-slate-400")}><Highlighter className="w-4 h-4" /></button>
 
-            <div className="w-px h-5 bg-slate-100 mx-2" />
-            <button onClick={() => editor.chain().focus().toggleBulletList().run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("bulletList") ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><ListIcon className="w-4 h-4" /></button>
-            <button onClick={() => editor.chain().focus().toggleOrderedList().run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("orderedList") ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><ListOrderedIcon className="w-4 h-4" /></button>
-            <button onClick={() => editor.chain().focus().toggleTaskList().run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("taskList") ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><CheckSquare className="w-4 h-4" /></button>
+              <div className="w-px h-5 bg-slate-100 mx-2" />
+              <button onClick={() => editor.chain().focus().toggleBulletList().run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("bulletList") ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><ListIcon className="w-4 h-4" /></button>
+              <button onClick={() => editor.chain().focus().toggleOrderedList().run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("orderedList") ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><ListOrderedIcon className="w-4 h-4" /></button>
+              <button onClick={() => editor.chain().focus().toggleTaskList().run()} className={cn("p-2 rounded-xl transition-all", editor.isActive("taskList") ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-400")}><CheckSquare className="w-4 h-4" /></button>
 
-            <div className="w-px h-5 bg-slate-100 mx-2" />
-            <button onClick={setLink} className={cn("p-2 rounded-xl transition-all", editor.isActive("link") ? "bg-indigo-600 text-white" : "hover:bg-slate-50 text-slate-400")}><LinkIcon className="w-4 h-4" /></button>
-            <button onClick={addImage} className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 transition-all"><ImageIcon className="w-4 h-4" /></button>
+              <div className="w-px h-5 bg-slate-100 mx-2" />
+              <button onClick={setLink} className={cn("p-2 rounded-xl transition-all", editor.isActive("link") ? "bg-indigo-600 text-white" : "hover:bg-slate-50 text-slate-400")}><LinkIcon className="w-4 h-4" /></button>
+              <button onClick={addImage} className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 transition-all"><ImageIcon className="w-4 h-4" /></button>
 
-            <div className="w-px h-5 bg-slate-100 mx-2" />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 transition-all flex items-center gap-1 group">
-                  <Palette className="w-4 h-4 group-hover:text-indigo-600 transition-colors" />
-                  <ChevronDown className="w-3 h-3 text-slate-300 group-hover:text-indigo-300 transition-colors" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="p-3 min-w-[200px] rounded-3xl bg-white border-slate-200 shadow-2xl z-[1000] animate-in fade-in zoom-in duration-200">
-                <div className="grid grid-cols-5 gap-2">
-                  {["#000000", "#ef4444", "#f97316", "#f59e0b", "#10b981", "#3b82f6", "#6366f1", "#8b5cf6", "#d946ef", "#64748b"].map(color => (
-                    <button
-                      key={color}
-                      onClick={() => editor.chain().focus().setColor(color).run()}
-                      className="w-8 h-8 rounded-xl border border-slate-100 hover:scale-110 active:scale-95 transition-all shadow-sm"
-                      style={{ backgroundColor: color }}
-                    />
-                  ))}
-                  <button onClick={() => editor.chain().focus().unsetColor().run()} className="w-8 h-8 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center hover:bg-slate-100 transition-all">
-                    <Type className="w-4 h-4 text-slate-400" />
+              <div className="w-px h-5 bg-slate-100 mx-2" />
+              <button onClick={addPage} className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 transition-all flex items-center gap-1.5 px-3">
+                <PlusCircle className="w-4 h-4 text-indigo-600" />
+                <span className="text-[10px] font-bold text-slate-600">페이지 추가</span>
+              </button>
+
+              <div className="w-px h-5 bg-slate-100 mx-2" />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 transition-all flex items-center gap-1 group">
+                    <Palette className="w-4 h-4 group-hover:text-indigo-600 transition-colors" />
+                    <ChevronDown className="w-3 h-3 text-slate-300 group-hover:text-indigo-300 transition-colors" />
                   </button>
-                </div>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="p-3 min-w-[200px] rounded-3xl bg-white border-slate-200 shadow-2xl z-[1000] animate-in fade-in zoom-in duration-200">
+                  <div className="grid grid-cols-5 gap-2">
+                    {["#000000", "#ef4444", "#f97316", "#f59e0b", "#10b981", "#3b82f6", "#6366f1", "#8b5cf6", "#d946ef", "#64748b"].map(color => (
+                        <button
+                          key={color}
+                          onClick={() => editor.chain().focus().setColor(color).run()}
+                          className="w-8 h-8 rounded-xl border border-slate-100 hover:scale-110 active:scale-95 transition-all shadow-sm"
+                          style={{ backgroundColor: color }}
+                        />
+                      ))}
+                    <button onClick={() => editor.chain().focus().unsetColor().run()} className="w-8 h-8 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center hover:bg-slate-100 transition-all">
+                      <Type className="w-4 h-4 text-slate-400" />
+                    </button>
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
         </div>
 
         {/* Scrollable Main Viewport */}
-        <main id="editor-main" className="flex-1 overflow-y-auto bg-slate-50 relative p-4 md:p-12 pb-96 custom-scroll flex flex-col items-center gap-10">
-          {/* Backdrop Sheets */}
-          <div className="absolute inset-0 flex flex-col items-center pointer-events-none p-4 md:p-12 gap-10">
-            {Array.from({ length: numPages }).map((_, i) => (
-              <div
-                key={i}
-                className="w-full max-w-[816px] bg-white border border-slate-200/60 rounded-[48px] shrink-0"
-                style={{ height: pageHeight }}
-              />
-            ))}
-          </div>
-
+        <main id="editor-main" className="flex-1 overflow-y-auto bg-slate-200 relative p-4 md:p-12 pb-96 custom-scroll flex flex-col items-center gap-12">
           {/* Editor Core */}
-          <div className="relative z-10 w-full flex flex-col items-center">
-            <div ref={contentRef} className="w-full max-w-[816px]">
-              <EditorContent editor={editor} />
-            </div>
+          <div className="relative z-10 w-full flex flex-col items-center gap-12">
+            <EditorContent editor={editor} className="paging-editor" />
           </div>
         </main>
 
@@ -388,21 +844,62 @@ export default function DocEditor({ docId, initialData }: { docId: string, initi
               </div>
 
               {isShared && (
-                <div className="space-y-3">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-2">비밀 링크</label>
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1 bg-white border border-slate-200 rounded-[20px] px-6 py-4 text-slate-800 truncate text-[10px] font-bold">
-                      {shareUrl}
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between p-6 bg-slate-50 rounded-[32px] border border-slate-200/50">
+                    <div className="space-y-1">
+                      <div className="font-bold text-slate-800 text-xs uppercase tracking-widest">권한 설정</div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleToggleShare("view")}
+                          className={cn(
+                            "px-3 py-1.5 rounded-xl text-[10px] font-bold transition-all",
+                            shareType === "view" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200" : "bg-white text-slate-400 border border-slate-100"
+                          )}
+                        >
+                          보기 전용
+                        </button>
+                        <button
+                          onClick={() => handleToggleShare("edit")}
+                          className={cn(
+                            "px-3 py-1.5 rounded-xl text-[10px] font-bold transition-all",
+                            shareType === "edit" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200" : "bg-white text-slate-400 border border-slate-100"
+                          )}
+                        >
+                          편집 가능
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between p-6 bg-slate-50 rounded-[32px] border border-slate-200/50">
+                    <div className="space-y-1">
+                      <div className="font-bold text-slate-800 text-xs uppercase tracking-widest">팀 대시보드</div>
+                      <div className="text-[10px] text-slate-400 font-medium">구성원들의 Cowork 대시보드에 문서를 표시합니다.</div>
                     </div>
                     <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(shareUrl);
-                        alert("복사되었습니다!");
-                      }}
-                      className="w-14 h-14 bg-indigo-600 text-white rounded-[20px] flex items-center justify-center active:scale-90 transition-all"
+                      onClick={() => handleToggleShare(undefined, !shareTeam)}
+                      className={cn("w-14 h-8 rounded-full relative transition-all duration-300", shareTeam ? "bg-indigo-600" : "bg-slate-200")}
                     >
-                      <Save className="w-5 h-5" />
+                      <div className={cn("absolute top-1 w-6 h-6 bg-white rounded-full transition-all duration-300 shadow-sm", shareTeam ? "left-7" : "left-1")} />
                     </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-2">비밀 링크</label>
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1 bg-white border border-slate-200 rounded-[20px] px-6 py-4 text-slate-800 truncate text-[10px] font-bold">
+                        {shareUrl}
+                      </div>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(shareUrl);
+                          alert("복사되었습니다!");
+                        }}
+                        className="w-14 h-14 bg-indigo-600 text-white rounded-[20px] flex items-center justify-center active:scale-90 transition-all font-bold"
+                      >
+                        <Save className="w-5 h-5" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -411,33 +908,45 @@ export default function DocEditor({ docId, initialData }: { docId: string, initi
         </Dialog>
 
         <style jsx global>{`
-          .prose h1 { font-size: 3.5rem; font-weight: 900; margin-bottom: 2rem; color: #0f172a; line-height: 1; letter-spacing: -0.05em; }
-          .prose h2 { font-size: 2.25rem; font-weight: 800; margin-top: 3rem; margin-bottom: 1rem; color: #1e293b; letter-spacing: -0.03em; }
-          .prose h3 { font-size: 1.5rem; font-weight: 700; margin-top: 2rem; margin-bottom: 0.75rem; color: #334155; }
-          .prose p { line-height: 1.8; margin-bottom: 1.25rem; color: #475569; font-size: 1.1rem; }
-          .prose ul:not([data-type="taskList"]) { list-style-type: disc; padding-left: 1.5rem; margin-bottom: 1.5rem; }
-          .prose ol { list-style-type: decimal; padding-left: 1.5rem; margin-bottom: 1.5rem; }
-          .prose li { margin-bottom: 0.6rem; color: #475569; }
-          .prose blockquote { border-left: 6px solid #e2e8f0; padding: 1rem 0 1rem 2rem; font-style: italic; color: #64748b; margin: 2.5rem 0; background: #f8fafc; border-radius: 0 1rem 1rem 0; }
-          .prose pre { background: #1e293b; color: #f8fafc; padding: 2rem; border-radius: 1.5rem; font-size: 0.95rem; overflow-x: auto; margin: 2.5rem 0; }
-          .prose code { color: #eb5757; background: #fff5f5; padding: 0.2rem 0.4rem; border-radius: 0.4rem; font-size: 0.85em; }
-          .prose pre code { color: inherit; background: none; padding: 0; }
-          .prose a { color: #4f46e5; text-decoration: underline; text-underline-offset: 6px; font-weight: 700; }
-          .prose img { transition: all 0.4s ease; border-radius: 1rem; }
-          .prose ul[data-type="taskList"] { list-style: none; padding: 0; }
-          .prose ul[data-type="taskList"] li { display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.5rem; }
-          .prose ul[data-type="taskList"] input[type="checkbox"] { width: 1.25rem; height: 1.25rem; border-radius: 0.375rem; border: 2px solid #cbd5e1; appearance: none; cursor: pointer; position: relative; top: 0.25rem; flex-shrink: 0; transition: all 0.2s; }
-          .prose ul[data-type="taskList"] input[type="checkbox"]:checked { background-color: #4f46e5; border-color: #4f46e5; }
-          .prose ul[data-type="taskList"] input[type="checkbox"]:checked::after { content: '✓'; color: white; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.75rem; font-weight: bold; }
-          .prose .is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; color: #cbd5e1; pointer-events: none; height: 0; font-style: italic; }
+          .paging-editor { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 3rem; }
+          .a4-page { 
+            width: 816px; 
+            height: 1122px; 
+            max-width: 816px;
+            background: white; 
+            box-sizing: border-box;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            border: 1px solid #e2e8f0;
+            padding: 96px 80px;
+            border-radius: 8px;
+            position: relative;
+            outline: none !important;
+            transition: all 0.2s ease;
+            margin: 0 auto;
+            overflow: hidden;
+          }
+          .a4-page:focus-within { transform: scale(1.002); border-color: #cbd5e1; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); }
 
+          .conflict-page { border: 2px dashed #ef4444 !important; background: #fffcfc !important; }
+
+          .prose h1 { font-size: 3rem; font-weight: 900; margin-bottom: 2rem; color: #0f172a; line-height: 1.1; letter-spacing: -0.05em; }
+          .prose h2 { font-size: 2rem; font-weight: 800; margin-top: 2.5rem; margin-bottom: 1rem; color: #1e293b; letter-spacing: -0.03em; }
+          .prose h3 { font-size: 1.5rem; font-weight: 700; margin-top: 1.5rem; margin-bottom: 0.75rem; color: #334155; }
+          .prose p { line-height: 1.8; margin-bottom: 1.25rem; color: #475569; font-size: 1.05rem; }
+          
           .custom-scroll::-webkit-scrollbar { width: 6px; }
           .custom-scroll::-webkit-scrollbar-track { background: transparent; }
           .custom-scroll::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
-          .custom-scroll::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
           
-          .scrollbar-hide::-webkit-scrollbar { display: none; }
-          .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+          .ProseMirror { min-height: unset !important; padding: 0 !important; }
+
+          @media print {
+            header, aside, .z-40, button { display: none !important; }
+            main { background: white !important; padding: 0 !important; overflow: visible !important; }
+            #editor-main { padding: 0 !important; }
+            .paging-editor { gap: 0 !important; }
+            .a4-page { box-shadow: none !important; border: none !important; border-radius: 0 !important; page-break-after: always; }
+          }
         `}</style>
       </div>
     </div>

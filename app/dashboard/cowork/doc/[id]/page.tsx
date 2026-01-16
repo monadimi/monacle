@@ -1,6 +1,7 @@
 import DocEditor from "@/components/cowork/DocEditor";
 import { getDoc } from "@/app/actions/cowork";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { cookies } from "next/headers";
 
 export default async function DocPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -13,5 +14,13 @@ export default async function DocPage({ params }: { params: Promise<{ id: string
     return <div>Error loading document: {result.error}</div>;
   }
 
-  return <DocEditor docId={id} initialData={result.doc} />;
+  const cookieStore = await cookies();
+  const session = cookieStore.get("monacle_session");
+  const user = session?.value ? JSON.parse(session.value) : null;
+
+  if (!user) {
+    redirect("/");
+  }
+
+  return <DocEditor docId={id} initialData={result.doc as any} currentUser={user} />;
 }
