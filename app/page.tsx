@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { ArrowRight } from "lucide-react";
 import { startLogin } from "./actions/auth";
 
-export default function LoginPage() {
+function LoginContent() {
   const searchParams = useSearchParams();
   const error = searchParams.get("error");
 
@@ -45,43 +45,51 @@ export default function LoginPage() {
   };
 
   return (
+    <div className="glass-panel w-full max-w-md p-8 md:p-12 relative z-10 flex flex-col items-center text-center">
+      <div className="w-20 h-20 bg-slate-50 rounded-2xl flex items-center justify-center mb-8 shadow-lg shadow-slate-200 transform rotate-3 overflow-hidden p-4">
+        <img src="/monacle.svg" alt="Monacle Logo" className="w-full h-full object-contain" />
+      </div>
+
+      <h1 className="text-3xl md:text-4xl font-bold mb-3 tracking-tight text-slate-900">
+        Monacle
+      </h1>
+      <p className="text-slate-600 mb-10 text-lg">
+        Secure cloud storage for the <span className="font-semibold text-indigo-600">Monad</span> team.
+      </p>
+
+      {error && (
+        <div className="mb-6 p-4 bg-red-50 border border-red-100 text-red-600 rounded-xl text-sm font-medium">
+          Authentication Error: {error}
+        </div>
+      )}
+
+      <form action={handleLogin} className="w-full">
+        <button
+          type="submit"
+          className="w-full bg-slate-900 hover:bg-black text-white font-bold h-14 rounded-2xl transition-all active:scale-[0.98] shadow-xl shadow-slate-900/20 flex items-center justify-center gap-2 group"
+        >
+          <span>Continue with Monad ID</span>
+          <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+        </button>
+      </form>
+
+      <p className="mt-8 text-xs text-slate-400 uppercase tracking-widest font-semibold">
+        Monad Internal Service
+      </p>
+    </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
     <main className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
       {/* Decorative Background Elements */}
       <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-indigo-500/20 rounded-full blur-[120px] pointer-events-none" />
       <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-violet-500/20 rounded-full blur-[120px] pointer-events-none" />
 
-      <div className="glass-panel w-full max-w-md p-8 md:p-12 relative z-10 flex flex-col items-center text-center">
-        <div className="w-20 h-20 bg-slate-50 rounded-2xl flex items-center justify-center mb-8 shadow-lg shadow-slate-200 transform rotate-3 overflow-hidden p-4">
-          <img src="/monacle.svg" alt="Monacle Logo" className="w-full h-full object-contain" />
-        </div>
-
-        <h1 className="text-3xl md:text-4xl font-bold mb-3 tracking-tight text-slate-900">
-          Monacle
-        </h1>
-        <p className="text-slate-600 mb-10 text-lg">
-          Secure cloud storage for the <span className="font-semibold text-indigo-600">Monad</span> team.
-        </p>
-
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-100 text-red-600 rounded-xl text-sm font-medium">
-            Authentication Error: {error}
-          </div>
-        )}
-
-        <form action={handleLogin} className="w-full">
-          <button
-            type="submit"
-            className="w-full bg-slate-900 hover:bg-black text-white font-bold h-14 rounded-2xl transition-all active:scale-[0.98] shadow-xl shadow-slate-900/20 flex items-center justify-center gap-2 group"
-          >
-            <span>Continue with Monad ID</span>
-            <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-          </button>
-        </form>
-
-        <p className="mt-8 text-xs text-slate-400 uppercase tracking-widest font-semibold">
-          Monad Internal Service
-        </p>
-      </div>
+      <Suspense fallback={<div>Loading...</div>}>
+        <LoginContent />
+      </Suspense>
     </main>
   );
 }
