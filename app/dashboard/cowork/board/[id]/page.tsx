@@ -3,7 +3,14 @@ import { getBoard } from "@/app/actions/cowork";
 import { notFound, redirect } from "next/navigation";
 import { cookies } from "next/headers";
 
-function parseJsonCookie(value?: string): Record<string, unknown> | null {
+type UserSession = {
+  id: string;
+  email: string;
+  name: string;
+  avatar?: string;
+};
+
+function parseUserCookie(value?: string): UserSession | null {
   if (!value) return null;
   try {
     return JSON.parse(decodeURIComponent(value));
@@ -29,9 +36,9 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
 
   const cookieStore = await cookies();
   const session = cookieStore.get("monacle_session");
-  const user = parseJsonCookie(session?.value);
+  const user = parseUserCookie(session?.value);
 
-  if (!user) {
+  if (!user || !user.id || !user.email || !user.name) {
     redirect("/");
   }
 
