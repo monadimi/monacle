@@ -23,8 +23,8 @@ export async function GET(req: NextRequest) {
   const error = url.searchParams.get("error");
 
   const cookieStore = cookies();
-  const storedVerifier = cookieStore.get("verifier")?.value;
-  const storedState = cookieStore.get("state")?.value;
+  const storedVerifier = (await cookieStore).get("verifier")?.value;
+  const storedState = (await cookieStore).get("state")?.value;
 
   const baseUrl = getExternalBaseUrl(req);
   const redirectUri = `${baseUrl}/callback`;
@@ -115,7 +115,7 @@ export async function GET(req: NextRequest) {
 
     const isProd = process.env.NODE_ENV === "production";
 
-    cookieStore.set("monacle_token", accessToken, {
+    (await cookieStore).set("monacle_token", accessToken, {
       httpOnly: true,
       secure: isProd,
       sameSite: "lax",
@@ -123,8 +123,8 @@ export async function GET(req: NextRequest) {
       maxAge: 60 * 60 * 24 * 7,
     });
 
-    cookieStore.delete("verifier");
-    cookieStore.delete("state");
+    (await cookieStore).delete("verifier");
+    (await cookieStore).delete("state");
 
     return NextResponse.redirect(new URL("/dashboard", baseUrl));
   } catch (e) {
