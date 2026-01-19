@@ -19,7 +19,8 @@ import {
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
-import { createForm, createDoc, deleteForm, deleteDoc, createBoard, deleteBoard } from "@/app/actions/cowork";
+import { createForm, createDoc, deleteForm, deleteDoc, createBoard, deleteBoard, createDeck, deleteDeck } from "@/app/actions/cowork";
+import { createSheet, deleteSheet } from "@/app/actions/sheets";
 
 const templates = [
   { id: "t1", title: "빈 문서", type: "doc", icon: FileText, color: "bg-blue-500" },
@@ -47,7 +48,7 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
         return {
           id: item.id,
           title: item.title,
-          type: item.elements ? 'board' : (item.questions ? 'form' : 'doc'),
+          type: item.slides ? 'slide' : (item.elements ? 'board' : (item.questions ? 'form' : (item.data && item.data.columns ? 'sheet' : 'doc'))),
           owner: 'Me',
           updated: dateStr,
           starred: false
@@ -69,25 +70,24 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
   const handleCreate = async (type: string) => {
     if (type === 'form') {
       const result = await createForm();
-      if (result.success && result.id) {
-        router.push(`/dashboard/cowork/form/${result.id}`);
-      } else {
-        alert("설문지 생성 실패: " + result.error);
-      }
+      if (result.success && result.id) router.push(`/dashboard/cowork/form/${result.id}`);
+      else alert("설문지 생성 실패: " + result.error);
     } else if (type === 'doc') {
       const result = await createDoc();
-      if (result.success && result.id) {
-        router.push(`/dashboard/cowork/doc/${result.id}`);
-      } else {
-        alert("문서 생성 실패: " + result.error);
-      }
+      if (result.success && result.id) router.push(`/dashboard/cowork/doc/${result.id}`);
+      else alert("문서 생성 실패: " + result.error);
     } else if (type === 'board') {
       const result = await createBoard();
-      if (result.success && result.id) {
-        router.push(`/dashboard/cowork/board/${result.id}`);
-      } else {
-        alert("보드 생성 실패: " + result.error);
-      }
+      if (result.success && result.id) router.push(`/dashboard/cowork/board/${result.id}`);
+      else alert("보드 생성 실패: " + result.error);
+    } else if (type === 'slide') {
+       const result = await createDeck();
+       if (result.success && result.id) router.push(`/dashboard/cowork/slides/${result.id}`);
+       else alert("프레젠테이션 생성 실패: " + result.error);
+    } else if (type === 'sheet') {
+       const result = await createSheet();
+       if (result.success && result.id) router.push(`/dashboard/cowork/sheets/${result.id}`);
+       else alert("스프레드시트 생성 실패: " + result.error);
     } else {
       alert(`${type} 생성 기능은 준비 중입니다!`);
     }
@@ -96,7 +96,13 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
   const handleDelete = async (id: string, type: string) => {
     if (!confirm("정말로 삭제하시겠습니까?")) return;
 
-    const res = type === 'form' ? await deleteForm(id) : (type === 'board' ? await deleteBoard(id) : await deleteDoc(id));
+    let res;
+    if (type === 'form') res = await deleteForm(id);
+    else if (type === 'board') res = await deleteBoard(id);
+    else if (type === 'slide') res = await deleteDeck(id);
+    else if (type === 'sheet') res = await deleteSheet(id);
+    else res = await deleteDoc(id);
+
     if (res.success) {
       setItems(prev => prev.filter(item => item.id !== id));
     } else {
@@ -201,6 +207,8 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
                     if (file.type === 'form') router.push(`/dashboard/cowork/form/${file.id}`);
                     else if (file.type === 'doc') router.push(`/dashboard/cowork/doc/${file.id}`);
                     else if (file.type === 'board') router.push(`/dashboard/cowork/board/${file.id}`);
+                    else if (file.type === 'slide') router.push(`/dashboard/cowork/slides/${file.id}`);
+                    else if (file.type === 'sheet') router.push(`/dashboard/cowork/sheets/${file.id}`);
                   }}
                 >
                   <div className="w-full h-3 bg-slate-200/50 rounded-full" />
@@ -304,6 +312,15 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
               <div className="flex flex-col gap-0.5">
                 <span className="font-bold text-sm">새 아이디어 보드</span>
                 <span className="text-[11px] text-slate-400">무한 캔버스 화이트보드</span>
+              </div>
+            </DropdownMenuItem>
+            <DropdownMenuItem className="p-3 cursor-pointer rounded-xl focus:bg-amber-50 focus:text-amber-700 transition-colors" onClick={() => handleCreate('slide')}>
+              <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center mr-4 text-amber-600 shadow-sm">
+                <Presentation className="w-5 h-5" />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <span className="font-bold text-sm">새 프레젠테이션</span>
+                <span className="text-[11px] text-slate-400">디자이너급 슬라이드</span>
               </div>
             </DropdownMenuItem>
           </DropdownMenuContent>

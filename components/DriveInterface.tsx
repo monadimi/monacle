@@ -5,7 +5,7 @@ import pb from "@/lib/pocketbase";
 import {
   Search, Upload, File as FileIcon, Trash2,
   Share2, Grid, List as ListIcon,
-  User, FolderOpen, Loader2, Folder as FolderIcon, ChevronRight, Home, ArrowUp, Users, ArrowUpDown, MoreVertical, Edit2, FolderInput, HardDrive, RefreshCw, DatabaseBackup
+  User, FolderOpen, Loader2, Folder as FolderIcon, ChevronRight, Home, ArrowUp, Users, ArrowUpDown, MoreVertical, Edit2, FolderInput, HardDrive, RefreshCw, DatabaseBackup, Terminal
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -17,6 +17,7 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 
 import { localDrive } from "@/lib/local-drive";
 import { getDeltaUpdates, getSchemaVersion } from "@/app/actions/sync";
+import DriveShell from "./drive/DriveShell";
 
 // ... Types (FileRecord, FolderRecord) can be imported or redefined. Keeping inline for single file edit simplicity if not shared.
 // Ideally share types. For now redefining locally to match FileModals.
@@ -58,6 +59,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
   const [tab, setTab] = useState<'personal' | 'team'>('personal');
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [folders, setFolders] = useState<FolderRecord[]>([]);
+  const [rawFolders, setRawFolders] = useState<FolderRecord[]>([]); // For shell path resolution
   const [currentFolder, setCurrentFolder] = useState<FolderRecord | null>(null);
   const [folderPath, setFolderPath] = useState<FolderRecord[]>([]);
 
@@ -86,6 +88,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [uploading, setUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [isShellEnabled, setIsShellEnabled] = useState(false);
 
   // Advanced Sort & Filter
   const [sort, setSort] = useState<'-created' | 'created' | 'name' | '-name'>('-created');
@@ -141,6 +144,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
 
     let allFiles = await localDrive.getAllFiles();
     let allFolders = await localDrive.getAllFolders();
+    setRawFolders(allFolders);
 
     // Owner Filter
     if (tab === 'personal') {
@@ -743,6 +747,13 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
                     <span className="text-[10px] text-red-400/80">로컬 데이터를 초기화합니다</span>
                   </div>
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setIsShellEnabled(!isShellEnabled)} className="gap-2 p-2.5 rounded-lg text-slate-600 focus:text-indigo-600 focus:bg-indigo-50">
+                  <Terminal className="w-4 h-4" />
+                  <div className="flex flex-col items-start gap-0.5">
+                    <span className="font-medium">드라이브 쉘 (실험적)</span>
+                    <span className="text-[10px] text-slate-400">객체 파이프라인 인터페이스 {isShellEnabled ? '(ON)' : '(OFF)'}</span>
+                  </div>
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -974,6 +985,17 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
           </div>
         </DialogContent>
       </Dialog>
+
+      <DriveShell 
+        isOpen={isShellEnabled}
+        onClose={() => setIsShellEnabled(false)}
+        files={files}
+        viewFolders={folders} // Pass current view folders
+        allFolders={rawFolders}
+        currentFolder={currentFolder}
+        onRefresh={refreshFiles}
+        user={user}
+      />
     </div>
   );
 }

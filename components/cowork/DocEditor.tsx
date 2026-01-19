@@ -16,6 +16,13 @@ import { CodeBlockLowlight } from "@tiptap/extension-code-block-lowlight";
 import { common, createLowlight } from "lowlight";
 import { Placeholder } from "@tiptap/extension-placeholder";
 
+// New Table & Export Imports
+import { Table } from "@tiptap/extension-table";
+import { TableRow } from "@tiptap/extension-table-row";
+import { TableCell } from "@tiptap/extension-table-cell";
+import { TableHeader } from "@tiptap/extension-table-header";
+import { Markdown } from "tiptap-markdown";
+
 import {
   ArrowLeft,
   Save,
@@ -43,13 +50,16 @@ import {
   Trash2,
   FileText,
   ChevronDown,
-  PlusCircle
+  PlusCircle,
+  Table as TableIcon,
+  Download,
+  FileDown
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { updateDoc, deleteDoc, toggleSharing } from "@/app/actions/cowork";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import pb from "@/lib/pocketbase";
 import { Step } from "prosemirror-transform";
 
@@ -115,6 +125,15 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
       Link.configure({ openOnClick: false, HTMLAttributes: { class: "text-indigo-600 underline cursor-pointer" } }),
       Image.configure({ HTMLAttributes: { class: "rounded-2xl max-w-full my-8" } }),
       Placeholder.configure({ placeholder: "내용을 입력하세요..." }),
+      Table.configure({ resizable: true, HTMLAttributes: { class: "border-collapse table-auto w-full my-4" } }),
+      TableRow,
+      TableHeader.configure({ HTMLAttributes: { class: "bg-slate-50 border border-slate-300 px-4 py-2 font-bold text-left" } }),
+      TableCell.configure({ HTMLAttributes: { class: "border border-slate-300 px-4 py-2" } }),
+      Markdown.configure({
+        html: true,
+        transformPastedText: true,
+        transformCopiedText: true,
+      }),
     ],
     content: ensurePaging(initialData.content),
     immediatelyRender: false,
@@ -786,6 +805,73 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
                 <PlusCircle className="w-4 h-4 text-indigo-600" />
                 <span className="text-[10px] font-bold text-slate-600">페이지 추가</span>
               </button>
+
+              <div className="w-px h-5 bg-slate-100 mx-2" />
+              
+              <button 
+                onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} 
+                className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 transition-all"
+                title="표 삽입 (3x3)"
+              >
+                <TableIcon className="w-4 h-4" />
+              </button>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                   <button className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 transition-all" title="내보내기">
+                      <Download className="w-4 h-4" />
+                   </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-40 z-[1000] bg-white rounded-xl shadow-xl border-slate-200">
+                   <DropdownMenuItem onClick={() => {
+                      try {
+                        console.log("Exporting Markdown...");
+                        console.log("Editor Storage:", editor.storage);
+                        console.log("Markdown Extension:", editor.storage.markdown);
+                        const md = editor.storage.markdown?.getMarkdown();
+                        console.log("Generated Markdown:", md);
+                        
+                        if (!md) {
+                          alert("Markdown content is empty. Check console for details.");
+                          return;
+                        }
+
+                        const blob = new Blob([md], { type: "text/markdown" });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = `${title || "document"}.md`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      } catch (e) {
+                        console.error("Markdown export failed:", e);
+                        alert("Export failed: " + e);
+                      }
+                   }} className="gap-2 cursor-pointer">
+                      <FileText className="w-4 h-4 text-slate-500"/> Markdown (.md)
+                   </DropdownMenuItem>
+                   <DropdownMenuItem onClick={() => {
+                      // PDF Export via Print
+                      const style = document.createElement('style');
+                      style.innerHTML = `
+                        @media print {
+                          @page { margin: 20mm; size: A4; }
+                          body { background: white; -webkit-print-color-adjust: exact; }
+                          aside, header, .z-50, .fixed, .sticky { display: none !important; }
+                          .prose { max-width: none !important; margin: 0 !important; width: 100% !important; }
+                          .ProseMirror { padding: 0 !important; border: none !important; min-height: 0 !important; }
+                          /* Hide paging markers if any */
+                          .page-break, .page-number { display: none; } 
+                        }
+                      `;
+                      document.head.appendChild(style);
+                      window.print();
+                      document.head.removeChild(style);
+                   }} className="gap-2 cursor-pointer">
+                      <FileDown className="w-4 h-4 text-slate-500"/> PDF (Print)
+                   </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
 
               <div className="w-px h-5 bg-slate-100 mx-2" />
               <DropdownMenu>
