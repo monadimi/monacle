@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { getAdminClient } from "@/lib/admin";
 
 function getExternalBaseUrl(req: NextRequest): string {
   const envBase = process.env.NEXT_PUBLIC_BASE_URL;
@@ -113,9 +114,45 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    // --- Sync with PocketBase ---
+    const pb = await getAdminClient();
+    let pbUser;
+    
+    try {
+      pbUser = await pb.collection("users").getFirstListItem(`email="${userData.email}"`);
+    } catch {
+      // Create user if not exists
+      const randomPassword = Math.random().toString(36).slice(-12) + Math.random().toString(36).slice(-12);
+      pbUser = await pb.collection("users").create({
+        email: userData.email,
+        password: randomPassword,
+        passwordConfirm: randomPassword,
+        name: userData.name || userData.nickname || "Monad User",
+        emailVisibility: true,
+        type: "monad",
+      });
+    }
+
     const isProd = process.env.NODE_ENV === "production";
 
     const res = NextResponse.redirect(new URL("/dashboard", baseUrl));
+
+    // For compatibility with dashboard layout/server actions
+    const sessionData = {
+      id: pbUser.id,
+      name: pbUser.name,
+      email: pbUser.email,
+      avatar: pbUser.avatar,
+      token: accessToken
+    };
+
+    res.cookies.set("monacle_session", JSON.stringify(sessionData), {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 7,
+    });
 
     res.cookies.set("monacle_token", accessToken, {
       httpOnly: true,
