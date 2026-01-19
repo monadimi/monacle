@@ -19,8 +19,18 @@ export default function LoginPage() {
 
     // 2. Store verifier in cookie for callback verification
     const cookieStore = await cookies();
-    cookieStore.set("verifier", verifier, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
-    cookieStore.set("state", state, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
+    cookieStore.set("verifier", verifier, { 
+      httpOnly: true, 
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      sameSite: "lax"
+    });
+    cookieStore.set("state", state, { 
+      httpOnly: true, 
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      sameSite: "lax"
+    });
 
     // 3. Redirect to Monad ID
     const params = new URLSearchParams({

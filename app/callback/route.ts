@@ -121,6 +121,7 @@ export async function GET(req: NextRequest) {
       secure: process.env.NODE_ENV === "production",
       path: "/",
       maxAge: 60 * 60 * 24 * 7, // 1 week
+      sameSite: "lax",
     });
 
     // Clean up temporary auth cookies
