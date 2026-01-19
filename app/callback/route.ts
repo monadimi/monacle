@@ -1,136 +1,136 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
+function getExternalBaseUrl(req: NextRequest): string {
+  const envBase = process.env.NEXT_PUBLIC_BASE_URL;
+  if (envBase && envBase.trim().length > 0) {
+    return envBase.replace(/\/+$/, "");
+  }
+
+  const proto = req.headers.get("x-forwarded-proto") || "http";
+  const host =
+    req.headers.get("x-forwarded-host") ||
+    req.headers.get("host") ||
+    "localhost:3000";
+
+  return `${proto}://${host}`.replace(/\/+$/, "");
+}
+
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const code = searchParams.get("code");
-  const state = searchParams.get("state");
-  const error = searchParams.get("error");
+  const url = new URL(req.url);
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+  const error = url.searchParams.get("error");
+
+  const baseUrl = getExternalBaseUrl(req);
+  const redirectUri = `${baseUrl}/callback`;
+  const clientId = process.env.MONAD_CLIENT_ID || "MONACLE_DEV";
+
+  if (error) {
+    return NextResponse.redirect(
+      new URL(`/?error=${encodeURIComponent(error)}`, baseUrl)
+    );
+  }
 
   const cookieStore = await cookies();
   const storedVerifier = cookieStore.get("verifier")?.value;
   const storedState = cookieStore.get("state")?.value;
 
-  const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-  const CLIENT_ID = process.env.MONAD_CLIENT_ID || "MONACLE_DEV";
-
-  console.log("Debug Callback:", {
-    code: code?.substring(0, 5) + "...",
-    state,
-    storedVerifier: storedVerifier ? "Present" : "Missing",
-    redirect_uri: `${BASE_URL}/callback`,
-    client_id: CLIENT_ID,
-  });
-
-  // 1. Validate State
   if (!state || !storedState || state !== storedState) {
-    console.error("State Validation Failed");
-    return NextResponse.redirect(new URL("/?error=state_mismatch", req.url));
-  }
-
-  if (error) {
-    return NextResponse.redirect(new URL(`/?error=${error}`, req.url));
+    return NextResponse.redirect(new URL("/?error=state_mismatch", baseUrl));
   }
 
   if (!code || !storedVerifier) {
-    console.error("Missing Code or Verifier");
     return NextResponse.redirect(
-      new URL("/?error=no_code_or_verifier", req.url)
+      new URL("/?error=no_code_or_verifier", baseUrl)
     );
   }
 
   try {
-    // 2. Exchange Code for Token
-    const payload = {
-      grant_type: "authorization_code",
-      client_id: CLIENT_ID,
-      redirect_uri: `${BASE_URL}/callback`,
-      code,
-      code_verifier: storedVerifier,
-    };
-
-    console.log("Token Exchange Payload:", JSON.stringify(payload, null, 2));
+    const form = new URLSearchParams();
+    form.set("grant_type", "authorization_code");
+    form.set("client_id", clientId);
+    form.set("redirect_uri", redirectUri);
+    form.set("code", code);
+    form.set("code_verifier", storedVerifier);
 
     const tokenRes = await fetch("https://id.monad.io.kr/api/token", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: form.toString(),
     });
 
     if (!tokenRes.ok) {
-      const err = await tokenRes.text();
-      console.error("Token exchange failed:", err);
+      const errText = await tokenRes.text();
+      console.error("Token exchange failed:", tokenRes.status, errText);
       return NextResponse.redirect(
-        new URL("/?error=token_exchange_failed", req.url)
+        new URL("/?error=token_exchange_failed", baseUrl)
       );
     }
 
-    const { access_token } = await tokenRes.json();
+    const tokenJson = await tokenRes.json();
+    const accessToken = tokenJson?.access_token;
 
-    try {
-      const parts = access_token.split(".");
-      if (parts.length === 3) {
-        const payload = JSON.parse(Buffer.from(parts[1], "base64").toString());
-        console.log("JWT Payload Debug:", payload);
-      }
-    } catch (e) {
-      console.error("Failed to parse JWT for debug", e);
+    if (!accessToken || typeof accessToken !== "string") {
+      console.error("Token response missing access_token:", tokenJson);
+      return NextResponse.redirect(
+        new URL("/?error=token_exchange_failed", baseUrl)
+      );
     }
 
-    // 3. Fetch User Info
     const userRes = await fetch("https://id.monad.io.kr/api/me", {
       headers: {
-        Authorization: `Bearer ${access_token}`,
-        "X-Client-Id": CLIENT_ID,
+        Authorization: `Bearer ${accessToken}`,
+        "X-Client-Id": clientId,
       },
     });
 
     if (!userRes.ok) {
-      const err = await userRes.text();
-      console.error("User info fetch failed:", userRes.status, err);
+      const errText = await userRes.text();
+      console.error("User info fetch failed:", userRes.status, errText);
       return NextResponse.redirect(
-        new URL("/?error=user_fetch_failed", req.url)
+        new URL("/?error=user_fetch_failed", baseUrl)
       );
     }
 
     const userData = await userRes.json();
-    console.log("Logged in user:", userData);
 
-    // 4. Check User Type
-    if (userData.type !== "monad") {
+    if (userData?.type !== "monad") {
       return NextResponse.redirect(
-        new URL("/?error=unauthorized_type", req.url)
+        new URL("/?error=unauthorized_type", baseUrl)
       );
     }
 
-    if (!userData.email?.endsWith("@monad.io.kr")) {
+    if (
+      !userData?.email ||
+      typeof userData.email !== "string" ||
+      !userData.email.endsWith("@monad.io.kr")
+    ) {
       return NextResponse.redirect(
-        new URL("/?error=unauthorized_domain", req.url)
+        new URL("/?error=unauthorized_domain", baseUrl)
       );
     }
 
-    // 5. Store Session
-    // We store the access_token so the client can use it for PocketBase requests.
-    const sessionData = {
-      ...userData,
-      token: access_token, // Important: Pass this to client
-    };
+    const isProd = process.env.NODE_ENV === "production";
 
-    cookieStore.set("monacle_session", JSON.stringify(sessionData), {
+    const res = NextResponse.redirect(new URL("/dashboard", baseUrl));
+
+    res.cookies.set("monacle_token", accessToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 7, // 1 week
+      secure: isProd,
       sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 7,
     });
 
-    // Clean up temporary auth cookies
-    cookieStore.delete("verifier");
-    cookieStore.delete("state");
+    res.cookies.delete("verifier");
+    res.cookies.delete("state");
 
-    return NextResponse.redirect(new URL("/dashboard", req.url));
+    return res;
   } catch (e) {
-    console.error(e);
-    return NextResponse.redirect(new URL("/?error=server_error", req.url));
+    console.error("Callback handler error:", e);
+    return NextResponse.redirect(new URL("/?error=server_error", baseUrl));
   }
 }
