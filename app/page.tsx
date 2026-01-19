@@ -74,7 +74,7 @@ function LoginContent() {
       </form>
 
       <p className="mt-8 text-xs text-slate-400 uppercase tracking-widest font-semibold">
-        Monad Internal Service
+        Monad Internal Service <span className="opacity-50 ml-2">v1.0</span>
       </p>
     </div>
   );
