@@ -22,10 +22,6 @@ export async function GET(req: NextRequest) {
   const state = url.searchParams.get("state");
   const error = url.searchParams.get("error");
 
-  const cookieStore = cookies();
-  const storedVerifier = (await cookieStore).get("verifier")?.value;
-  const storedState = (await cookieStore).get("state")?.value;
-
   const baseUrl = getExternalBaseUrl(req);
   const redirectUri = `${baseUrl}/callback`;
   const clientId = process.env.MONAD_CLIENT_ID || "MONACLE_DEV";
@@ -35,6 +31,10 @@ export async function GET(req: NextRequest) {
       new URL(`/?error=${encodeURIComponent(error)}`, baseUrl)
     );
   }
+
+  const cookieStore = await cookies();
+  const storedVerifier = cookieStore.get("verifier")?.value;
+  const storedState = cookieStore.get("state")?.value;
 
   if (!state || !storedState || state !== storedState) {
     return NextResponse.redirect(new URL("/?error=state_mismatch", baseUrl));
@@ -63,8 +63,8 @@ export async function GET(req: NextRequest) {
     });
 
     if (!tokenRes.ok) {
-      const err = await tokenRes.text();
-      console.error("Token exchange failed:", tokenRes.status, err);
+      const errText = await tokenRes.text();
+      console.error("Token exchange failed:", tokenRes.status, errText);
       return NextResponse.redirect(
         new URL("/?error=token_exchange_failed", baseUrl)
       );
@@ -88,8 +88,8 @@ export async function GET(req: NextRequest) {
     });
 
     if (!userRes.ok) {
-      const err = await userRes.text();
-      console.error("User info fetch failed:", userRes.status, err);
+      const errText = await userRes.text();
+      console.error("User info fetch failed:", userRes.status, errText);
       return NextResponse.redirect(
         new URL("/?error=user_fetch_failed", baseUrl)
       );
@@ -115,7 +115,9 @@ export async function GET(req: NextRequest) {
 
     const isProd = process.env.NODE_ENV === "production";
 
-    (await cookieStore).set("monacle_token", accessToken, {
+    const res = NextResponse.redirect(new URL("/dashboard", baseUrl));
+
+    res.cookies.set("monacle_token", accessToken, {
       httpOnly: true,
       secure: isProd,
       sameSite: "lax",
@@ -123,10 +125,10 @@ export async function GET(req: NextRequest) {
       maxAge: 60 * 60 * 24 * 7,
     });
 
-    (await cookieStore).delete("verifier");
-    (await cookieStore).delete("state");
+    res.cookies.delete("verifier");
+    res.cookies.delete("state");
 
-    return NextResponse.redirect(new URL("/dashboard", baseUrl));
+    return res;
   } catch (e) {
     console.error("Callback handler error:", e);
     return NextResponse.redirect(new URL("/?error=server_error", baseUrl));
