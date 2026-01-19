@@ -8,9 +8,6 @@ const nextConfig: NextConfig = {
       bodySizeLimit: "200gb",
     },
   },
-  typescript: {
-  ignoreBuildErrors: true,
-  },
 };
 
 export default nextConfig;

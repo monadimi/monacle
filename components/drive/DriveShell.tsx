@@ -2,8 +2,8 @@
 
 import { useState, useRef, useEffect } from "react";
 import { 
-  Terminal, Play, Pause, Square, AlertTriangle, ArrowRight, 
-  Check, X, Loader2, ChevronUp, ChevronDown, Command, File as FileIcon, Eye, HelpCircle, BookOpen, Folder as FolderIcon
+  Terminal, Play, Square, AlertTriangle, ArrowRight, 
+  Check, X, Loader2, ChevronUp, ChevronDown, File as FileIcon, BookOpen, Folder as FolderIcon
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { updateFile, deleteFile, updateFileShare, updateFolder, deleteFolder } from "@/app/actions/cloud";
@@ -11,28 +11,15 @@ import { motion, AnimatePresence } from "framer-motion";
 
 // --- Types ---
 
-type FileRecord = {
-  id: string;
-  name: string;
-  folder: string; // parent ID
-  file: string | string[];
-  [key: string]: any;
-};
-
-type FolderRecord = {
-  id: string;
-  name: string;
-  parent: string;
-  [key: string]: any;
-};
+import { FileRecord, FolderRecord } from "./types";
 
 type ShellItem = (FileRecord | FolderRecord) & { kind: 'file' | 'folder' };
 
 type OperationNode = 
-  | { type: 'selection'; command: string; args: any; count: number; description: string; preview?: ShellItem[] }
-  | { type: 'transform'; command: string; args: any; description: string; preview?: ShellItem[] }
-  | { type: 'action'; command: string; args: any; description: string; requiresConfirmation?: boolean }
-  | { type: 'help'; command: string; args: any; description: string };
+  | { type: 'selection'; command: string; args: Record<string, unknown>; count: number; description: string; preview?: ShellItem[] }
+  | { type: 'transform'; command: string; args: Record<string, unknown>; description: string; preview?: ShellItem[] }
+  | { type: 'action'; command: string; args: Record<string, unknown>; description: string; requiresConfirmation?: boolean }
+  | { type: 'help'; command: string; args: Record<string, unknown>; description: string; requiresConfirmation?: boolean };
 
 type ExecutionStatus = 'idle' | 'running' | 'paused' | 'completed' | 'stopped';
 
@@ -51,7 +38,6 @@ interface DriveShellProps {
   allFolders: FolderRecord[]; // Need all folders for path resolution
   currentFolder: FolderRecord | null;
   onRefresh: () => void;
-  user: { id: string };
 }
 
 // --- Helpers ---
@@ -99,7 +85,7 @@ const parseArgs = (segment: string) => {
 
 // --- Component ---
 
-export default function DriveShell({ isOpen, onClose, files, viewFolders, allFolders, currentFolder, onRefresh, user }: DriveShellProps) {
+export default function DriveShell({ isOpen, onClose, files, viewFolders, allFolders, currentFolder, onRefresh }: DriveShellProps) {
   const [input, setInput] = useState("");
   const [pipeline, setPipeline] = useState<OperationNode[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -151,16 +137,16 @@ export default function DriveShell({ isOpen, onClose, files, viewFolders, allFol
         else if (index === 0) {
           if (cmd === 'find') {
             const query = args[0] || ""; 
-            const filtered = currentSet.filter(item => item.name.toLowerCase().includes(query.toLowerCase()));
+            const filtered = currentSet.filter(item => (item.name || "").toLowerCase().includes(query.toLowerCase()));
             currentSet = filtered;
             
             node = {
               type: 'selection',
               command: 'find',
-              args: { query },
+              args: { query: query as string },
               count: filtered.length,
               preview: filtered.slice(0, 5),
-              description: `"${query}" 포함 항목 검색`
+              description: `&quot;${query}&quot; 포함 항목 검색`
             };
           } else if (cmd === 'all' || cmd === '*') {
              node = {
@@ -182,13 +168,13 @@ export default function DriveShell({ isOpen, onClose, files, viewFolders, allFol
             let desc = "필터 적용";
             
             if (raw.includes('type=img') || raw.includes('type=image')) {
-               currentSet = currentSet.filter(item => item.kind === 'file' && /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(item.name));
+               currentSet = currentSet.filter(item => item.kind === 'file' && /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(item.name || ""));
                desc = "이미지 파일만 필터링";
             } else if (raw.includes('type=doc')) {
-               currentSet = currentSet.filter(item => item.kind === 'file' && /\.(pdf|doc|docx|txt|md)$/i.test(item.name));
+               currentSet = currentSet.filter(item => item.kind === 'file' && /\.(pdf|doc|docx|txt|md)$/i.test(item.name || ""));
                desc = "문서 파일만 필터링";
             } else if (raw.includes('type=video')) {
-               currentSet = currentSet.filter(item => item.kind === 'file' && /\.(mp4|mov|webm)$/i.test(item.name));
+               currentSet = currentSet.filter(item => item.kind === 'file' && /\.(mp4|mov|webm)$/i.test(item.name || ""));
                desc = "동영상 파일만 필터링";
             } else if (raw.includes('type=folder') || raw.includes('type=dir')) {
                currentSet = currentSet.filter(item => item.kind === 'folder');
@@ -210,23 +196,23 @@ export default function DriveShell({ isOpen, onClose, files, viewFolders, allFol
             node = {
               type: 'action',
               command: 'move',
-              args: { dest },
-              description: `"${dest}" 폴더로 이동`
+               args: { dest: dest },
+              description: `&quot;${dest}&quot; 폴더로 이동`
             };
           } else if (cmd === 'rename') {
              const newName = args[0] || "";
              node = {
               type: 'action',
               command: 'rename',
-              args: { newName },
-              description: `"${newName}"으로 이름 변경`
+               args: { newName: newName as string },
+              description: `&quot;${newName}&quot;으로 이름 변경`
             };
           } else if (cmd === 'share') {
              const type = args[0] || "view";
              node = {
               type: 'action',
               command: 'share',
-              args: { type },
+               args: { type: type as string },
               description: `${type === 'edit' ? '편집' : '보기'} 권한으로 공유`
             };
           } else if (cmd === 'delete') {
@@ -247,8 +233,8 @@ export default function DriveShell({ isOpen, onClose, files, viewFolders, allFol
 
       setPipeline(nodes);
       setError(null);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError((e as Error).message);
       setPipeline([]);
     }
   }, [input, files, viewFolders]); // Added viewFolders dependency
@@ -291,8 +277,8 @@ export default function DriveShell({ isOpen, onClose, files, viewFolders, allFol
     ];
 
     if (selectionNode.command === 'find') {
-      const q = selectionNode.args.query;
-      currentSet = currentSet.filter(item => item.name.toLowerCase().includes(q.toLowerCase() || ""));
+      const q = (selectionNode.args.query as string) || "";
+      currentSet = currentSet.filter(item => (item.name || "").toLowerCase().includes(q.toLowerCase()));
     }
 
     setProgress({ current: 0, total: currentSet.length, success: 0, failed: 0 });
@@ -320,16 +306,16 @@ export default function DriveShell({ isOpen, onClose, files, viewFolders, allFol
         
         if (node.type === 'transform') {
            if (node.command === 'filter') {
-             const raw = node.args.raw || "";
+             const raw = (node.args.raw as string) || "";
              let pass = true;
              
              if (item.kind === 'file') {
                 if (raw.includes('type=img') || raw.includes('type=image')) {
-                  pass = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(item.name);
+                  pass = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(item.name || "");
                 } else if (raw.includes('type=doc')) {
-                  pass = /\.(pdf|doc|docx|txt|md)$/i.test(item.name);
+                  pass = /\.(pdf|doc|docx|txt|md)$/i.test(item.name || "");
                 } else if (raw.includes('type=video')) {
-                  pass = /\.(mp4|mov|webm)$/i.test(item.name);
+                  pass = /\.(mp4|mov|webm)$/i.test(item.name || "");
                 }
              }
              
@@ -344,7 +330,7 @@ export default function DriveShell({ isOpen, onClose, files, viewFolders, allFol
            addLog(`[${item.kind === 'folder' ? '📂' : '📄'} ${item.name}] 실행: ${node.command}`, 'info');
            try {
              if (node.command === 'move') {
-               const destId = resolveFolderId(node.args.dest, currentFolder, allFolders);
+               const destId = resolveFolderId(node.args.dest as string || "", currentFolder, allFolders);
                
                if (item.kind === 'file') {
                  const res = await updateFile(item.id, { folder: destId });
@@ -369,12 +355,12 @@ export default function DriveShell({ isOpen, onClose, files, viewFolders, allFol
                 if (!res.success) throw new Error(res.error);
              } else if (node.command === 'rename') {
                 const count = currentSet.length;
-                let baseName = node.args.newName;
+                const baseName = node.args.newName as string || "";
                 
                 let newName = baseName;
 
                 if (item.kind === 'file') {
-                   const originalExt = item.name.includes('.') ? item.name.split('.').pop() : '';
+                   const originalExt = (item.name || "").includes('.') ? (item.name || "").split('.').pop() : '';
                    const hasNewExt = baseName.includes('.');
                    
                    if (count > 1) {
@@ -409,7 +395,7 @@ export default function DriveShell({ isOpen, onClose, files, viewFolders, allFol
              
              setProgress(prev => ({ ...prev, success: prev.success + 1 }));
            } catch (e: any) {
-             addLog(`오류 발생 (${item.name}): ${e.message}`, 'error');
+              addLog(`오류 발생 (${item.name || "Unknown"}): ${(e as Error).message}`, 'error');
              setProgress(prev => ({ ...prev, failed: prev.failed + 1 }));
            }
         }
@@ -495,8 +481,8 @@ export default function DriveShell({ isOpen, onClose, files, viewFolders, allFol
                         <h3 className="text-blue-400 font-bold mb-2">선택 (Selection)</h3>
                         <ul className="space-y-2 mb-6">
                            <li>
-                              <code className="bg-slate-800 px-1 py-0.5 rounded text-blue-200">find "검색어"</code>
-                              <p className="text-slate-400 text-xs mt-1">이름에 "검색어"가 포함된 항목(파일+폴더)을 선택합니다.</p>
+                              <code className="bg-slate-800 px-1 py-0.5 rounded text-blue-200">find &quot;검색어&quot;</code>
+                              <p className="text-slate-400 text-xs mt-1">이름에 &quot;검색어&quot;가 포함된 항목(파일+폴더)을 선택합니다.</p>
                            </li>
                            <li>
                               <code className="bg-slate-800 px-1 py-0.5 rounded text-blue-200">all</code> 또는 <code className="bg-slate-800 px-1 py-0.5 rounded text-blue-200">*</code>
@@ -521,7 +507,7 @@ export default function DriveShell({ isOpen, onClose, files, viewFolders, allFol
                               <p className="text-slate-400 text-xs mt-1">선택 항목을 지정된 폴더로 이동합니다.</p>
                            </li>
                            <li>
-                              <code className="bg-slate-800 px-1 py-0.5 rounded text-emerald-200">rename "새이름"</code>
+                              <code className="bg-slate-800 px-1 py-0.5 rounded text-emerald-200">rename &quot;새이름&quot;</code>
                               <p className="text-slate-400 text-xs mt-1">이름을 변경합니다. 중복 시 번호가 붙습니다.</p>
                            </li>
                            <li>
@@ -554,7 +540,7 @@ export default function DriveShell({ isOpen, onClose, files, viewFolders, allFol
           <div className="flex-1 flex flex-col p-4 border-r border-slate-800 gap-4 overflow-y-auto w-full md:w-2/3">
              {/* Pipeline Viz */}
              <div className="flex items-center gap-2 overflow-x-auto p-2 bg-slate-950/30 rounded-lg min-h-[100px]">
-                {pipeline.length === 0 && <span className="text-slate-600 italic text-sm">명령어를 입력하세요... 예: find "프로젝트" | filter --type=folder | move /OldProjects</span>}
+                {pipeline.length === 0 && <span className="text-slate-600 italic text-sm">명령어를 입력하세요... 예: find &quot;프로젝트&quot; | filter --type=folder | move /OldProjects</span>}
                 {pipeline.map((node, i) => (
                   <div key={i} className="flex items-center gap-2 shrink-0 group relative">
                     <div className={cn(
@@ -563,7 +549,7 @@ export default function DriveShell({ isOpen, onClose, files, viewFolders, allFol
                       node.type === 'transform' ? "bg-purple-900/20 border-purple-800 text-purple-200" :
                       node.type === 'help' ? "bg-slate-800 border-slate-600 text-slate-300" :
                       "bg-emerald-900/20 border-emerald-800 text-emerald-200",
-                      node.requiresConfirmation && "border-red-500/50 bg-red-900/10"
+                      (node.type === 'action' || node.type === 'help') && node.requiresConfirmation && "border-red-500/50 bg-red-900/10"
                     )}>
                        <span className="font-bold uppercase text-[10px] opacity-50 mb-1">{node.type}</span>
                        <span className="font-medium whitespace-nowrap">{node.command}</span>

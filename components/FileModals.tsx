@@ -7,39 +7,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { updateFileShare, updateFile, listFiles, updateFolder } from "@/app/actions/cloud";
 
-// Reusing FileRecord type or importing if shared. 
-// For now duplicating simplified version to avoid circular deps if not in a types file.
-// Update type to include expanded owner
-type FileRecord = {
-  id: string;
-  collectionId: string;
-  file: string[] | string;
-  owner: string;
-  share_type: 'none' | 'view' | 'edit';
-  is_shared: boolean;
-  short_id?: string;
-  created: string;
-  updated: string; // Added updated field
-  name?: string; // Added name field
-  size?: number;
-  expand?: {
-    owner?: {
-      name?: string;
-      email?: string;
-    }
-  }
-};
-
-type FolderRecord = {
-  id: string;
-  collectionId: string;
-  collectionName: string;
-  name: string;
-  owner: string;
-  parent: string;
-  created: string;
-  updated: string;
-};
+import { FileRecord, FolderRecord } from "./drive/types";
 
 export function FileDetailModal({
   file,

@@ -40,3 +40,5 @@ lint_log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.agent/*

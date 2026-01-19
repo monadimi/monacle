@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { 
   Plus, 
   ChevronLeft, 
@@ -22,101 +22,45 @@ import { SlideElement, Slide, DeckData } from "./types";
 import { useHistory } from "./useHistory";
 import { SLIDE_TEMPLATES } from "./templates";
 
-
+import { TransformOverlay } from "./TransformOverlay";
 
 // --- Transform Overlay Component ---
-const TransformOverlay = ({ element, onUpdate, isSelected }: { element: SlideElement, onUpdate: (id: string, updates: Partial<SlideElement>) => void, isSelected: boolean }) => {
-    if (!isSelected) return null;
+// Extracted to ./TransformOverlay.tsx
 
-    const Handle = ({ cursor, position, onResize }: { cursor: string, position: string, onResize: (e: React.MouseEvent) => void }) => (
-        <div 
-            className={cn("absolute w-3 h-3 bg-white border border-indigo-500 rounded-full z-50 pointer-events-auto", position)}
-            style={{ cursor }}
-            onMouseDown={(e) => {
-                e.preventDefault(); // Prevent text selection during drag
-                e.stopPropagation();
-                onResize(e);
-            }}
-        />
-    );
+type TextAlign = 'left' | 'center' | 'right' | 'justify' | 'initial' | 'inherit';
 
-    const startResize = (e: React.MouseEvent, direction: string) => {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        const startX = e.clientX;
-        const startY = e.clientY;
-        const startW = element.w;
-        const startH = element.h;
-        const startPosX = element.x;
-        const startPosY = element.y;
+interface SlideEditorProps {
+  initialData: DeckData | undefined;
+  readOnly?: boolean;
+}
 
-        const moveHandler = (moveEvent: MouseEvent) => {
-            const dx = moveEvent.clientX - startX;
-            const dy = moveEvent.clientY - startY;
-            
-            let newW = startW;
-            let newH = startH;
-            let newX = startPosX;
-            let newY = startPosY;
-
-            if (direction.includes('e')) newW = Math.max(10, startW + dx);
-            if (direction.includes('s')) newH = Math.max(10, startH + dy);
-            if (direction.includes('w')) {
-                newW = Math.max(10, startW - dx);
-                newX = startPosX + (startW - newW);
-            }
-            if (direction.includes('n')) {
-                newH = Math.max(10, startH - dy);
-                newY = startPosY + (startH - newH);
-            }
-
-            onUpdate(element.id, { x: newX, y: newY, w: newW, h: newH });
-        };
-
-        const upHandler = () => {
-            window.removeEventListener('mousemove', moveHandler);
-            window.removeEventListener('mouseup', upHandler);
-        };
-
-        window.addEventListener('mousemove', moveHandler);
-        window.addEventListener('mouseup', upHandler);
-    };
-
-    return (
-        <div 
-            className="absolute inset-0 pointer-events-none border-2 border-indigo-500 z-50"
-            style={{ left: -2, top: -2, right: -2, bottom: -2 }}
-        >
-            {/* Corners */}
-            <Handle cursor="nw-resize" position="-top-1.5 -left-1.5" onResize={(e) => startResize(e, 'nw')} />
-            <Handle cursor="ne-resize" position="-top-1.5 -right-1.5" onResize={(e) => startResize(e, 'ne')} />
-            <Handle cursor="sw-resize" position="-bottom-1.5 -left-1.5" onResize={(e) => startResize(e, 'sw')} />
-            <Handle cursor="se-resize" position="-bottom-1.5 -right-1.5" onResize={(e) => startResize(e, 'se')} />
-            
-            {/* Sides */}
-            <Handle cursor="n-resize" position="-top-1.5 left-1/2 -translate-x-1/2" onResize={(e) => startResize(e, 'n')} />
-            <Handle cursor="s-resize" position="-bottom-1.5 left-1/2 -translate-x-1/2" onResize={(e) => startResize(e, 's')} />
-            <Handle cursor="w-resize" position="top-1/2 -translate-y-1/2 -left-1.5" onResize={(e) => startResize(e, 'w')} />
-            <Handle cursor="e-resize" position="top-1/2 -translate-y-1/2 -right-1.5" onResize={(e) => startResize(e, 'e')} />
-        </div>
-    );
-};
-
-export default function SlideEditor({ initialData, currentUser, readOnly = false }: { initialData: DeckData, currentUser: any, readOnly?: boolean }) {
+export default function SlideEditor({ initialData, readOnly = false }: SlideEditorProps) {
   const router = useRouter();
-  
+
   // History State
   const { 
-    state: slides, 
-    setState: setSlides, 
-    undo, redo, canUndo, canRedo 
-  } = useHistory<Slide[]>(initialData.slides || []);
+      state: slides, 
+      setState: setSlides, 
+      undo, 
+      redo, 
+      canUndo, 
+      canRedo 
+  } = useHistory<Slide[]>(initialData ? initialData.slides : []);
 
+  // --- State ---
+  // const [slides, setSlides] = useState<Slide[]>(initialData ? initialData.slides : []); // Removed as useHistory manages this
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
-  const [title, setTitle] = useState(initialData.title);
-  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
+  const [title, setTitle] = useState(initialData ? initialData.title : "Untitled");
+  const [selection, setSelection] = useState<string[]>([]);
   const [isPresenting, setIsPresenting] = useState(false);
+  /* eslint-disable @typescript-eslint/no-unused-vars */
+  const [scale, setScale] = useState(1);
+  /* eslint-enable @typescript-eslint/no-unused-vars */
+  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "error">("saved");
+
+  // If no initial data, show loading/error AFTER hooks are initialized
+  // if (!initialData) return <div>Data not found</div>; // Moved to end
+  
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false); // Template Menu State
   const [isImageMenuOpen, setIsImageMenuOpen] = useState(false); // Image Menu State
   const [isImageSearchOpen, setIsImageSearchOpen] = useState(false); // Image Search Popover State
@@ -133,19 +77,20 @@ export default function SlideEditor({ initialData, currentUser, readOnly = false
   ]);
 
   // Selection & Clipboard
-  const [selection, setSelection] = useState<string[]>([]);
+  // const [selection, setSelection] = useState<string[]>([]); // Moved above
   const [clipboard, setClipboard] = useState<SlideElement[]>([]);
   
   const currentSlide = slides[currentSlideIndex];
 
   // Save logic
-  const saveTimeout = useRef<NodeJS.Timeout>();
+  const saveTimeout = useRef<NodeJS.Timeout | undefined>(undefined);
   const saveDeck = useCallback(async (newSlides: Slide[], newTitle: string) => {
+    if (!initialData) return;
     setSaveStatus('saving');
     const res = await updateDeck(initialData.id, { title: newTitle, slides: newSlides });
     if (res.success) setSaveStatus('saved');
     else setSaveStatus('error');
-  }, [initialData.id]);
+  }, [initialData]); // updateDeck is stable (imported action)
 
   const debouncedSave = useCallback((newSlides: Slide[], newTitle: string) => {
       clearTimeout(saveTimeout.current);
@@ -284,7 +229,8 @@ export default function SlideEditor({ initialData, currentUser, readOnly = false
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [slides, selection, clipboard, canUndo, canRedo, undo, redo, readOnly, isPresenting, currentSlide, title, debouncedSave]);
+  }, [slides, selection, clipboard, canUndo, canRedo, undo, redo, readOnly, isPresenting, currentSlide, title, debouncedSave]); 
+  // removed updateSlidesWithSave to break cycle or satisfy linter if it's stable wrapper
 
   
   // Slide Management Helpers
@@ -403,7 +349,7 @@ export default function SlideEditor({ initialData, currentUser, readOnly = false
       const duration = anim.duration || 0.5;
       const delay = anim.delay || 0;
       
-      const transition = { duration, delay, ease: "easeOut" };
+      const transition = { duration, delay, ease: "easeOut" as const };
       
       switch (anim.type) {
           case 'fade-in': return { initial: { opacity: 0 }, animate: { opacity: 1, transition } };
@@ -472,7 +418,7 @@ export default function SlideEditor({ initialData, currentUser, readOnly = false
                         fontSize: 'inherit',
                         fontWeight: 'inherit',
                         color: 'inherit',
-                        textAlign: textAlign as any, // Also apply text-align for multi-line text
+                        textAlign: textAlign as TextAlign,
                         whiteSpace: 'pre-wrap'
                     }}>
                         {el.content}
@@ -496,7 +442,7 @@ export default function SlideEditor({ initialData, currentUser, readOnly = false
                         display: 'flex',
                         flexDirection: 'column',
                         justifyContent: 'center', // Match viewing vertical align
-                        textAlign: textAlign as any,
+                        textAlign: textAlign as TextAlign,
                         fontSize: el.style?.fontSize, // Match viewing font size for caret
                         fontFamily: el.style?.fontFamily,
                         padding: 0 // Ensure exact overlap
@@ -512,8 +458,10 @@ export default function SlideEditor({ initialData, currentUser, readOnly = false
   };
   
   // ... (Rest of render, sidebar)
+  if (!initialData) return <div>Data not found</div>;
+
   return (
-    <div className={cn("flex flex-col h-screen w-full bg-slate-50 overflow-hidden", isPresenting && "fixed inset-0 z-[9999] bg-black")}>
+    <div className={cn("flex flex-col h-[calc(100vh-64px)] bg-slate-100 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 overflow-hidden select-none", isPresenting && "fixed inset-0 z-[9999] bg-black")}>
        {/* (Header same as before) */}
        {!isPresenting && (
         <header className="h-14 bg-white border-b flex items-center px-4 justify-between z-10 shrink-0">
@@ -596,6 +544,7 @@ export default function SlideEditor({ initialData, currentUser, readOnly = false
                                             id: crypto.randomUUID(),
                                             elements: [],
                                             background: { type: 'solid', value: '#ffffff' },
+                                            layout: "blank", // Explicitly type or ensure it matches
                                             ...generated
                                         };
                                         const newSlides = [...slides, newSlide];

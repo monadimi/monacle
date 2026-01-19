@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { motion, AnimatePresence, useMotionValue, useTransform } from "framer-motion";
+import { motion } from "framer-motion";
 import { 
   Plus, 
   Minus, 
@@ -12,14 +12,12 @@ import {
   Square, 
   Trash2, 
   RefreshCcw,
-  Pen,
-  Pencil,
-  Share2,
-  Maximize2,
   Link2,
   Eraser,
-  Image as ImageIcon,
-  ChevronLeft
+  ChevronLeft,
+  Share2,
+  Pencil,
+  Maximize2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
@@ -63,7 +61,7 @@ interface BoardData {
 
 interface IdeaboardProps {
   initialData: BoardData;
-  currentUser: any;
+  currentUser: { id: string; email: string; name: string; avatar?: string };
   readOnly?: boolean;
 }
 
@@ -80,7 +78,7 @@ const COLORS = [
 export default function Ideaboard({ initialData, currentUser, readOnly = false }: IdeaboardProps) {
   const router = useRouter();
   const boardId = initialData.id;
-  const clientId = useRef(Math.random().toString(36).substring(7)).current;
+  const [clientId] = useState(() => Math.random().toString(36).substring(7));
 
   // Board State
   const [title, setTitle] = useState(initialData.title || "");
@@ -104,7 +102,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [currentStrokeColor, setCurrentStrokeColor] = useState(COLORS[3]); // Red/Dark for pen by default
 
-  const [activeEditors, setActiveEditors] = useState<any[]>([]);
+  const [activeEditors, setActiveEditors] = useState<{ userId: string; name: string; avatarUrl?: string; updated: string }[]>([]);
   const [linkingFromId, setLinkingFromId] = useState<string | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [isUploading, setIsUploading] = useState(false);
@@ -133,12 +131,10 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
 
   // --- Real-time Sync & Save ---
 
-  const debouncedSave = useCallback((updatedElements: BoardElement[]) => {
-    setSaveStatus("saving");
-    
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+  // Use a ref to store the recursive save function to avoid circular dependency in useCallback
+  const saveRef = useRef<(elements: BoardElement[]) => void>(() => {});
 
-    saveTimerRef.current = setTimeout(async () => {
+  const performSave = useCallback(async (updatedElements: BoardElement[]) => {
       const nextVersion = versionRef.current + 1;
       const res = await updateBoard(boardId, { 
         elements: updatedElements,
@@ -149,12 +145,10 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
       if (res.success) {
         setSaveStatus("saved");
         setTVersion(nextVersion);
-      } else if ((res as any).conflict) {
+      } else if ((res as unknown as { conflict?: boolean, latestBoard?: BoardData }).conflict) {
         setSaveStatus("error");
-        const latest = (res as any).latestBoard;
+        const latest = (res as unknown as { latestBoard: BoardData }).latestBoard;
         // Merge strategy: Local wins but remote elements added if missing? 
-        // For simplicity, let's just use remote if version is higher, 
-        // OR better yet, let the user know. For MVP, we'll force overwrite with a merge.
         const remoteElements = latest.elements || [];
         const merged = [...updatedElements];
         
@@ -170,14 +164,28 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
         setTVersion(latest.tVersion);
         setTimeout(() => { isApplyingRemoteRef.current = false; }, 0);
         
-        // Retry save with merged
-        debouncedSave(merged);
+        // Retry save with merged using the ref
+        saveRef.current(merged); 
       } else {
         setSaveStatus("error");
       }
-      saveTimerRef.current = null;
-    }, 2000);
   }, [boardId, clientId]);
+
+  const debouncedSave = useCallback((updatedElements: BoardElement[]) => {
+    setSaveStatus("saving");
+    
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+
+    saveTimerRef.current = setTimeout(() => {
+        performSave(updatedElements);
+        saveTimerRef.current = null;
+    }, 2000);
+  }, [performSave]);
+
+  // Update the ref whenever debouncedSave changes
+  useEffect(() => {
+    saveRef.current = debouncedSave;
+  }, [debouncedSave]);
 
   useEffect(() => {
     if (!boardId) return;
@@ -213,12 +221,15 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
       if (!res.ok) return;
       const data = await res.json();
       const items = data.items || [];
-      const uniqueItems = items.reduce((acc: any[], curr: any) => {
-        if (!acc.find(i => i.user_id === curr.user_id)) acc.push(curr);
+      
+      interface PresenceItem { user_id: string; name: string; avatar: string; updated: string; }
+
+      const uniqueItems = items.reduce((acc: PresenceItem[], curr: PresenceItem) => {
+        if (!acc.find((i) => i.user_id === curr.user_id)) acc.push(curr);
         return acc;
       }, []);
 
-      const next = uniqueItems.map((record: any) => ({
+      const next = uniqueItems.map((record: PresenceItem) => ({
         userId: record.user_id,
         name: record.name,
         avatarUrl: buildAvatarUrl({ id: record.user_id, avatar: record.avatar }),
@@ -237,19 +248,29 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
       });
     } catch {}
   }, [boardId]);
+  
+  // Stable refs for interval to avoid dependency cycle
+  const fetchPresenceRef = useRef(fetchPresence);
+  const upsertPresenceRef = useRef(upsertPresence);
+  useEffect(() => { fetchPresenceRef.current = fetchPresence; }, [fetchPresence]);
+  useEffect(() => { upsertPresenceRef.current = upsertPresence; }, [upsertPresence]);
 
   useEffect(() => {
     if (readOnly) return;
-    fetchPresence();
-    upsertPresence();
-    const heartbeat = setInterval(upsertPresence, 12000);
-    const refresh = setInterval(fetchPresence, 6000);
+    
+    // Initial call
+    fetchPresenceRef.current();
+    upsertPresenceRef.current();
+
+    const heartbeat = setInterval(() => upsertPresenceRef.current(), 12000);
+    const refresh = setInterval(() => fetchPresenceRef.current(), 6000);
+    
     return () => {
       clearInterval(heartbeat);
       clearInterval(refresh);
       fetch(`/api/presence/board?boardId=${boardId}`, { method: "DELETE", keepalive: true }).catch(() => {});
     };
-  }, [boardId, readOnly, fetchPresence, upsertPresence]);
+  }, [boardId, readOnly]);
 
   useEffect(() => {
     const handlePaste = async (e: ClipboardEvent) => {
@@ -311,7 +332,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
       const canvasY = (e.clientY - offset.y) / scale;
       
       const newPath: BoardElement = {
-        id: Math.random().toString(36).substring(7),
+        id: crypto.randomUUID(),
         type: 'path',
         x: 0, y: 0, w: 0, h: 0,
         color: currentStrokeColor,
@@ -331,7 +352,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
       if (tool === 'sticky') {
         addSticky(x, y);
       } else {
-        addShape(tool as any, x, y);
+        addShape(tool as 'circle' | 'square', x, y);
       }
       if (e.shiftKey) {
         // Stay in tool
@@ -518,14 +539,14 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
         <div className="flex items-center gap-6">
           {/* Active Editors */}
           <div className="flex items-center -space-x-2">
-            {activeEditors.map((editor, i) => (
+            {activeEditors.map((editor) => (
               <div 
                 key={editor.userId} 
                 className="w-8 h-8 rounded-full border-2 border-white bg-slate-200 overflow-hidden shadow-sm"
                 title={editor.name}
               >
                 {editor.avatarUrl ? (
-                  <img src={editor.avatarUrl} className="w-full h-full object-cover" />
+                  <img src={editor.avatarUrl} alt={editor.name} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-[10px] font-bold text-slate-500">
                     {editor.name?.[0]?.toUpperCase()}
@@ -566,7 +587,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
         </button>
         <div className="w-full h-px bg-slate-100 my-1" />
         <button 
-          onClick={addSticky} 
+           onClick={() => addSticky()}  
           disabled={readOnly}
           className={cn("p-3 rounded-xl transition-all", tool === 'sticky' ? "bg-indigo-600 text-white shadow-lg" : "hover:bg-indigo-50 text-indigo-500")}
           title="Add Sticky Note"
@@ -853,7 +874,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
                     document.addEventListener('mouseup', onMouseUp, { passive: false });
                   }}
                 >
-                  <img src={el.imageUrl} className="w-full h-full object-contain pointer-events-none" />
+                  <img src={el.imageUrl} alt="Board Element" className="w-full h-full object-contain pointer-events-none" />
                   
                   {!readOnly && (
                     <>

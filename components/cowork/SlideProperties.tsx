@@ -329,7 +329,7 @@ export default function SlideProperties({ selection, elements, currentSlide, onU
                  <span className="text-sm text-slate-600">Radius</span>
                  <input 
                    type="range" min="0" max="100"
-                   value={parseInt(element.style?.borderRadius || '0')}
+                   value={parseInt(String(element.style?.borderRadius || '0'))}
                    onChange={(e) => onUpdate(element.id, { style: { ...element.style, borderRadius: `${e.target.value}px` } })}
                    className="w-24"
                  />

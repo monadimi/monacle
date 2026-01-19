@@ -96,8 +96,8 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
   const handleDelete = async (id: string, type: string) => {
     if (!confirm("정말로 삭제하시겠습니까?")) return;
 
-    let res;
-    if (type === 'form') res = await deleteForm(id);
+    let res: { success: boolean; error?: string } = { success: false, error: "Unknown error" };
+    if (type === 'form') res = await deleteForm(id) || res;
     else if (type === 'board') res = await deleteBoard(id);
     else if (type === 'slide') res = await deleteDeck(id);
     else if (type === 'sheet') res = await deleteSheet(id);
