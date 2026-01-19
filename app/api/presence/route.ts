@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     if (!session?.value) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const body = await request.json();
     const docId = body?.docId;
@@ -80,7 +80,7 @@ export async function DELETE(request: NextRequest) {
     if (!session?.value) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const { searchParams } = new URL(request.url);
     const docId = searchParams.get("docId");

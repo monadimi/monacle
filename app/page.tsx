@@ -35,7 +35,7 @@ export default function LoginPage() {
     // 3. Redirect to Monad ID
     const params = new URLSearchParams({
       client_id: CLIENT_ID,
-      redirect_uri: "https://monacle.snowman0919.site/callback",
+      redirect_uri: `${BASE_URL}/callback`,
       response_type: "code",
       scope: "email name type",
       state: state,

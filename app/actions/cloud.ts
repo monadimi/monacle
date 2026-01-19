@@ -78,7 +78,7 @@ export async function createFolder(
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     // Use Cached Client
     const pb = await getAdminClient();
@@ -122,7 +122,7 @@ export async function uploadFile(formData: FormData) {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
 
@@ -184,7 +184,7 @@ export async function listFiles(
       throw new Error("Unauthorized: No session found");
     }
 
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
     if (!user.id) {
       throw new Error("Unauthorized: Invalid session");
     }
@@ -294,7 +294,7 @@ export async function deleteFile(id: string) {
     const session = cookieStore.get("monacle_session");
 
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
     if (!user.id) throw new Error("Unauthorized");
 
     // 2. Admin Check
@@ -338,7 +338,7 @@ export async function deleteFolder(id: string) {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     // 2. Admin Check
     const pb = await getAdminClient();
@@ -405,7 +405,7 @@ export async function updateFileShare(
     const session = cookieStore.get("monacle_session");
 
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
     if (!user.id) throw new Error("Unauthorized");
 
     // 2. Admin Check
@@ -443,7 +443,7 @@ export async function updateFile(
     const session = cookieStore.get("monacle_session");
 
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
     if (!user.id) throw new Error("Unauthorized");
 
     // 2. Admin Check
@@ -498,7 +498,7 @@ export async function updateFolder(
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
     const record = await pb.collection("folders").getOne(id);
@@ -535,7 +535,7 @@ export async function getStorageUsage(isTeam: boolean) {
     const session = cookieStore.get("monacle_session");
 
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
     let ownerId = user.id;

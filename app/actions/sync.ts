@@ -22,7 +22,7 @@ export async function getDeltaUpdates(
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
     const serverVersion = await getCurrentVersion(pb);

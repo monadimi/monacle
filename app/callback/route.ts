@@ -146,7 +146,7 @@ export async function GET(req: NextRequest) {
       token: accessToken
     };
 
-    res.cookies.set("monacle_session", JSON.stringify(sessionData), {
+    res.cookies.set("monacle_session", encodeURIComponent(JSON.stringify(sessionData)), {
       httpOnly: true,
       secure: isProd,
       sameSite: "lax",
