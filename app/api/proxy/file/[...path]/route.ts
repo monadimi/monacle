@@ -31,7 +31,7 @@ export async function GET(
     // 1. Verify Session
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    const user = session?.value ? JSON.parse(session.value) : null;
+    const user = session?.value ? JSON.parse(decodeURIComponent(session.value)) : null;
 
     // 2. Admin Client (Cached)
     const pb = await getAdminClient();
@@ -141,9 +141,11 @@ export async function GET(
       files.sort((a, b) => getPartNum(a) - getPartNum(b));
 
       const fileToken = await pb.files.getToken();
-      const fileUrls = files.map((f: string) =>
-        pb.files.getURL(record, f, { token: fileToken })
-      );
+      const fileUrls = files.map((f: string) => {
+        const url = pb.files.getURL(record, f, { token: fileToken });
+        console.log(`[Proxy] Generated Part URL: ${url}`);
+        return url;
+      });
 
       streamBody = makeStitchedStream(
         fileUrls,
@@ -161,11 +163,14 @@ export async function GET(
       const response = await fetch(fileUrl, {
         headers: { Authorization: pb.authStore.token },
       });
+      console.log(`[Proxy] Fetching file from: ${fileUrl}`);
 
-      if (!response.ok)
+      if (!response.ok) {
+        console.error(`[Proxy] Upstream fetch failed: ${response.status} ${response.statusText}`);
         return new NextResponse("File fetch failed", {
           status: response.status,
         });
+      }
       streamBody = response.body;
       contentType =
         response.headers.get("content-type") || "application/octet-stream";
