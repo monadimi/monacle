@@ -28,5 +28,5 @@ export default async function SlidePage({ params }: { params: Promise<{ id: stri
     );
   }
 
-  return <SlideEditor initialData={deck} currentUser={user} />;
+  return <SlideEditor initialData={deck} />;
 }

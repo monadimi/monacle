@@ -7,10 +7,9 @@ import {
   Share2, Grid, List as ListIcon,
   User, FolderOpen, Loader2, Folder as FolderIcon, ChevronRight, Home, ArrowUp, Users, ArrowUpDown, MoreVertical, Edit2, FolderInput, HardDrive, RefreshCw, DatabaseBackup, Terminal
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
-import { listFiles, deleteFile, createFolder, deleteFolder, getStorageUsage } from "@/app/actions/cloud";
+import { deleteFile, createFolder, deleteFolder, getStorageUsage } from "@/app/actions/cloud";
 import { FileDetailModal, ShareModal, MoveModal, RenameModal } from "@/components/FileModals";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "./ui/dropdown-menu";
@@ -19,40 +18,7 @@ import { localDrive } from "@/lib/local-drive";
 import { getDeltaUpdates, getSchemaVersion } from "@/app/actions/sync";
 import DriveShell from "./drive/DriveShell";
 
-// ... Types (FileRecord, FolderRecord) can be imported or redefined. Keeping inline for single file edit simplicity if not shared.
-// Ideally share types. For now redefining locally to match FileModals.
-type FileRecord = {
-  id: string;
-  collectionId: string;
-  collectionName: string;
-  file: string[] | string; // Can be string (single) or array (multiple/chunked)
-  owner: string;
-  share_type: 'none' | 'view' | 'edit';
-  created: string;
-  updated: string;
-  is_shared: boolean;
-  short_id?: string;
-  size?: number;
-  name?: string;
-  folder?: string; // Added folder field
-  tVersion?: number; // Added tVersion
-  expand?: {
-    owner?: {
-      name?: string;
-      email?: string;
-    }
-  };
-};
-
-type FolderRecord = {
-  id: string;
-  name: string;
-  owner: string;
-  parent: string;
-  created: string;
-  updated: string;
-  tVersion?: number; // Added tVersion
-};
+import { FileRecord, FolderRecord } from "./drive/types";
 
 export default function DriveInterface({ user }: { user: { id: string; email: string; name: string; token: string } }) {
 
@@ -96,6 +62,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
 
   // File Input Ref
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   // States for Modals
   const [selectedFile, setSelectedFile] = useState<FileRecord | null>(null);
@@ -113,7 +80,8 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
   // Pagination
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const PER_PAGE = 24; // ~20 items
+
+
 
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return '0 B';
@@ -146,37 +114,36 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
     let allFolders = await localDrive.getAllFolders();
     setRawFolders(allFolders);
 
-    // Owner Filter
     if (tab === 'personal') {
-      allFiles = allFiles.filter((f: any) => f.owner === user.id);
-      allFolders = allFolders.filter((f: any) => f.owner === user.id);
+      allFiles = allFiles.filter((f: FileRecord) => f.owner === user.id);
+      allFolders = allFolders.filter((f: FolderRecord) => f.owner === user.id);
     } else {
       // Team: Assume anything not me is shared/team. 
       // Ideally should check team ID, but for now this matches "Team Space" concept roughly?
       // Actually user.id owned files can also be in team folders?
       // Let's stick to simple: Personal = My ID, Team = Not My ID.
-      allFiles = allFiles.filter((f: any) => f.owner !== user.id);
-      allFolders = allFolders.filter((f: any) => f.owner !== user.id);
+      allFiles = allFiles.filter((f: FileRecord) => f.owner !== user.id);
+      allFolders = allFolders.filter((f: FolderRecord) => f.owner !== user.id);
     }
 
     // Folder Filter
     const currentId = currentFolder ? currentFolder.id : "";
-    const filteredFiles = allFiles.filter((f: any) => (f.folder || "") === currentId);
-    const filteredFolders = allFolders.filter((f: any) => (f.parent || "") === currentId);
+    const filteredFiles = allFiles.filter((f) => (f.folder || "") === currentId);
+    const filteredFolders = allFolders.filter((f) => (f.parent || "") === currentId);
 
     // Search & Type Filter
     let finalFiles = filteredFiles;
     let finalFolders = filteredFolders;
 
     if (search) {
-      finalFiles = allFiles.filter((f: any) => f.name.toLowerCase().includes(search.toLowerCase()));
+      finalFiles = allFiles.filter((f) => f.name.toLowerCase().includes(search.toLowerCase()));
       // Search across all folders usually? Or current?
       // Standard behavior: Search usually searches globally or recursively.
       // Let's search ALL files matching owner.
-      finalFiles = allFiles.filter((f: any) => f.name.toLowerCase().includes(search.toLowerCase()));
-      finalFolders = allFolders.filter((f: any) => f.name.toLowerCase().includes(search.toLowerCase()));
+      finalFiles = allFiles.filter((f) => f.name.toLowerCase().includes(search.toLowerCase()));
+      finalFolders = allFolders.filter((f) => f.name.toLowerCase().includes(search.toLowerCase()));
     } else if (filterType !== 'all') {
-      finalFiles = finalFiles.filter((f: any) => {
+      finalFiles = finalFiles.filter((f) => {
         const ext = f.name.split('.').pop()?.toLowerCase();
         if (filterType === 'image') return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext || '');
         if (filterType === 'video') return ['mp4', 'mov', 'webm'].includes(ext || '');
@@ -187,11 +154,13 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
     }
 
     // Sort
-    const sortFn = (a: any, b: any) => {
+    const sortFn = (a: FileRecord | FolderRecord, b: FileRecord | FolderRecord) => {
       if (sort === '-created') return new Date(b.created).getTime() - new Date(a.created).getTime();
       if (sort === 'created') return new Date(a.created).getTime() - new Date(b.created).getTime();
-      if (sort === 'name') return a.name.localeCompare(b.name);
-      if (sort === '-name') return b.name.localeCompare(a.name);
+      const aName = a.name || "";
+      const bName = b.name || "";
+      if (sort === 'name') return aName.localeCompare(bName);
+      if (sort === '-name') return bName.localeCompare(aName);
       return 0;
     };
 
@@ -199,6 +168,10 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
     setFolders(finalFolders.sort(sortFn));
     setLoading(false);
   }, [tab, currentFolder, search, filterType, sort, user]);
+
+  useEffect(() => {
+    setTotalPages(Math.max(1, Math.ceil(files.length / 50)));
+  }, [files]);
 
   const syncFiles = useCallback(async (retryCount = 0) => {
     try {
@@ -269,7 +242,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
         }
       }
     }
-  }, [tab, loadFromLocal]);
+  }, [tab, loadFromLocal, refreshStorage]);
 
   // Initial Load & Query Effects
   useEffect(() => {
@@ -351,9 +324,10 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
       await localDrive.saveFiles([freshRecord]);
       // Recalculate view
       loadFromLocal();
-    } catch (e: any) {
+    } catch (e: unknown) {
       // If 404, it means file is deleted on server. Remove from local.
-      if (e?.status === 404) {
+      const err = e as { status: number };
+      if (err?.status === 404) {
         await localDrive.deleteFiles([file.id]);
         loadFromLocal();
         alert("서버에서 삭제된 파일입니다. 로컬 목록에서 제거했습니다.");
@@ -389,7 +363,6 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
   // Client-side uploader with retries
   const uploadFileClient = async (formData: FormData, onProgress: (loaded: number) => void) => {
     const MAX_RETRIES = 3;
-    let lastError: any;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
@@ -419,18 +392,18 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
           xhr.onerror = () => reject({ status: 0, message: 'Network error' });
           xhr.send(formData);
         });
-      } catch (err: any) {
-        lastError = err;
+      } catch (err: unknown) {
         // Retry only on specific server/gateway errors (0 is network error, 502, 503, 504 are temporary)
-        const shouldRetry = err.status === 0 || err.status === 502 || err.status === 503 || err.status === 504;
+        const requestError = err as { status: number, message: string };
+        const shouldRetry = requestError.status === 0 || requestError.status === 502 || requestError.status === 503 || requestError.status === 504;
 
         if (shouldRetry && attempt < MAX_RETRIES) {
           const delay = attempt * 2000; // 2s, 4s... backoff
-          console.warn(`Upload attempt ${attempt} failed (${err.message}). Retrying in ${delay / 1000}s...`);
+          console.warn(`Upload attempt ${attempt} failed (${requestError.message}). Retrying in ${delay / 1000}s...`);
           await new Promise(resolve => setTimeout(resolve, delay));
           continue;
         }
-        throw new Error(err.message || "Upload failed after retries");
+        throw new Error(requestError.message || "Upload failed after retries");
       }
     }
   };
@@ -501,12 +474,12 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
               formData.append('recordId', recordId);
             }
 
-            const result: any = await uploadFileClient(formData, (loaded) => {
+            const result = (await uploadFileClient(formData, (loaded) => {
               // Progress for this chunk
               // Global loaded = uploadedTotalGlobal + start + loaded
               const currentTotal = uploadedTotalGlobal + start + loaded;
               setUploadProgress(prev => prev ? { ...prev, loaded: currentTotal } : null);
-            });
+            })) as { id: string; record: FileRecord };
 
             if (chunkIdx === 0) {
               recordId = result.record.id;
@@ -576,8 +549,7 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
     await handleBatchUpload(files);
   };
 
-  // Handlers for inputs
-  const folderInputRef = useRef<HTMLInputElement>(null);
+
 
   // Delete Handler
   const handleDelete = async (id: string, type: 'file' | 'folder') => {
@@ -994,7 +966,6 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
         allFolders={rawFolders}
         currentFolder={currentFolder}
         onRefresh={refreshFiles}
-        user={user}
       />
     </div>
   );

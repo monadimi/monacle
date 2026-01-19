@@ -45,8 +45,6 @@ import {
   Palette,
   Highlighter,
   CheckSquare,
-  Code,
-  Quote,
   Trash2,
   FileText,
   ChevronDown,
@@ -59,7 +57,7 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { updateDoc, deleteDoc, toggleSharing } from "@/app/actions/cowork";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import pb from "@/lib/pocketbase";
 import { Step } from "prosemirror-transform";
 
@@ -89,7 +87,7 @@ const ensurePaging = (html: string) => {
   return html;
 };
 
-export default function DocEditor({ docId, initialData, readOnly = false, currentUser = null }: { docId: string, initialData: Doc, readOnly?: boolean, currentUser?: any }) {
+export default function DocEditor({ docId, initialData, readOnly = false, currentUser = null }: { docId: string, initialData: Doc, readOnly?: boolean, currentUser?: Record<string, unknown> | null }) {
   const router = useRouter();
   const [clientId] = useState(() => typeof window !== 'undefined' ? crypto.randomUUID() : "server");
   const [title, setTitle] = useState(initialData.title);
@@ -103,10 +101,7 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
 
   const [tVersion, setTVersion] = useState(initialData.tVersion || 0);
   const [pageCount, setPageCount] = useState(1);
-  const docHeightRef = useRef(1056);
-  const [docHeight, setDocHeight] = useState(1056);
-  const contentRef = useRef<HTMLDivElement>(null);
-  const pendingStepsRef = useRef<any[]>([]);
+  const pendingStepsRef = useRef<Record<string, unknown>[]>([]);
   const isApplyingRemoteRef = useRef(false);
 
   const editor = useEditor({
@@ -197,8 +192,9 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
   useEffect(() => { saveStatusRef.current = saveStatus; }, [saveStatus]);
   useEffect(() => { versionRef.current = tVersion; }, [tVersion]);
   useEffect(() => {
-    if (currentUser?.token) {
-      pb.authStore.save(currentUser.token, currentUser);
+    const user = currentUser as { token: string } | null;
+    if (user?.token) {
+      pb.authStore.save(user.token, currentUser as any);
     }
   }, [currentUser]);
 
@@ -316,11 +312,13 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
       pendingUpdates.current = {}; 
       
       const nextVersion = versionRef.current + 1;
-      const res = await updateDoc(docId, { 
-        ...currentUpdates,
-        tVersion: nextVersion,
+      const res = await updateDoc(docId, {
+        title: currentUpdates.title || titleRef.current,
+        content: currentUpdates.content || editor?.getHTML(),
+        tVersion: versionRef.current,
         lastClientId: clientId
-      });
+      }) as { success: boolean; conflict?: boolean; updated?: Doc; latestDoc?: Doc; error?: string };
+      if (!res) return;
 
       if (res.success) {
         setSaveStatus("saved");
@@ -333,11 +331,13 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
         pendingStepsRef.current = [];
 
         runRemoteApply(() => {
-          editor.commands.setContent(ensurePaging(latest.content), false);
+          if (editor) {
+             editor.commands.setContent(ensurePaging(latest.content), { emitUpdate: true });
+          }
         });
         setTVersion(latest.tVersion);
 
-        if (stepsToReapply.length) {
+        if (stepsToReapply.length && editor) {
           const { state, view } = editor;
           let tr = state.tr;
           let appliedSteps = 0;
@@ -363,13 +363,15 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
           pendingStepsRef.current = reappliedSteps;
         }
 
-        debouncedSave({ content: editor.getHTML() });
+        if (editor) {
+          debouncedSave({ content: editor.getHTML() });
+        }
       } else {
         setSaveStatus("error");
       }
       saveTimerRef.current = null;
     }, 3000);
-  }, [docId, clientId, editor, runRemoteApply]);
+  }, [docId, clientId, editor, runRemoteApply, titleRef]);
 
   const isPagingRef = useRef(false);
   const lastSplitRef = useRef<{ pos: number, time: number } | null>(null);
@@ -535,7 +537,7 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
           const { from, to } = editor.state.selection;
           const stepsToReapply = pendingStepsRef.current.length ? [...pendingStepsRef.current] : [];
           runRemoteApply(() => {
-            editor.commands.setContent(ensurePaging(remote.content), false);
+            editor.commands.setContent(ensurePaging(remote.content), { emitUpdate: false });
           });
           if (stepsToReapply.length) {
             const { state, view } = editor;
@@ -827,8 +829,8 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
                       try {
                         console.log("Exporting Markdown...");
                         console.log("Editor Storage:", editor.storage);
-                        console.log("Markdown Extension:", editor.storage.markdown);
-                        const md = editor.storage.markdown?.getMarkdown();
+                        console.log("Markdown Extension:", (editor.storage as any).markdown);
+                        const md = (editor.storage as any).markdown?.getMarkdown();
                         console.log("Generated Markdown:", md);
                         
                         if (!md) {
@@ -922,7 +924,7 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
                   <div className="text-[10px] text-slate-400 font-medium">링크가 있는 모든 사용자가 문서를 볼 수 있습니다.</div>
                 </div>
                 <button
-                  onClick={handleToggleShare}
+                  onClick={() => handleToggleShare()}
                   className={cn("w-14 h-8 rounded-full relative transition-all duration-300", isShared ? "bg-indigo-600" : "bg-slate-200")}
                 >
                   <div className={cn("absolute top-1 w-6 h-6 bg-white rounded-full transition-all duration-300 shadow-sm", isShared ? "left-7" : "left-1")} />

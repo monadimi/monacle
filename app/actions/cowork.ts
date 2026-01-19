@@ -89,8 +89,8 @@ export async function deleteForm(id: string) {
 
     await pb.collection("forms").update(id, { is_deleted: true });
     return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -332,8 +332,8 @@ export async function deleteDoc(id: string) {
 
     await pb.collection("docs").update(id, { is_deleted: true });
     return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -423,7 +423,7 @@ export async function listUserDocs(parentId: string | null = null) {
 }
 
 export async function toggleSharing(
-  collection: "forms" | "docs" | "sheets",
+  collection: "forms" | "docs" | "sheets" | "boards",
   id: string,
   isShared: boolean,
   shareType: "view" | "edit" = "view",
@@ -445,8 +445,8 @@ export async function toggleSharing(
       share_team: isShared ? shareTeam : false,
     });
     return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: (error as Error).message };
   }
 }
 // --- Board Actions (Monacle Ideaboard) ---
@@ -521,7 +521,7 @@ export async function updateBoard(
   id: string,
   data: {
     title?: string;
-    elements?: any[];
+    elements?: unknown[];
     tVersion?: number;
     lastClientId?: string;
   }
@@ -556,7 +556,7 @@ export async function updateBoard(
       };
     }
 
-    const updateData: any = { ...data };
+    const updateData: Record<string, unknown> = { ...data };
     if (data.elements) updateData.elements = JSON.stringify(data.elements);
 
     await pb.collection("boards").update(id, updateData);
@@ -580,8 +580,8 @@ export async function deleteBoard(id: string) {
 
     await pb.collection("boards").update(id, { is_deleted: true });
     return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -609,14 +609,15 @@ export async function listUserBoards() {
         updated: record.updated,
         is_shared: record.is_shared,
         share_team: record.share_team,
-        questions: (record as any).questions // For identification in UI if mapping overlap
+        questions: (record as unknown as { questions: any }).questions // For identification in UI if mapping overlap
       }))
       .sort((a, b) => new Date(b.updated || b.created).getTime() - new Date(a.updated || a.created).getTime());
 
     return { success: true, boards };
-  } catch (error: any) {
-    console.error("List Boards Error:", error.data || error.message);
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    // @ts-expect-error - Error type is unknown but likely mostly has data/message
+    console.error("List Boards Error:", error.data || (error as Error).message);
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -652,9 +653,9 @@ export async function uploadBoardImage(boardId: string, formData: FormData) {
       filename: lastFile,
       url: `https://monadb.snowman0919.site/api/files/boards/${boardId}/${lastFile}`
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Upload Board Image Error:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -742,8 +743,8 @@ export async function updateDeck(
   id: string, 
   data: { 
     title?: string, 
-    slides?: any[], 
-    theme_config?: any,
+    slides?: unknown[];
+    theme_config?: unknown,
     is_shared?: boolean,
     share_type?: "view" | "edit",
     share_team?: boolean
@@ -766,15 +767,15 @@ export async function updateDeck(
       throw new Error("Forbidden");
     }
 
-    const updateData: any = { ...data };
+    const updateData: Record<string, unknown> = { ...data };
     if (data.slides) updateData.slides = JSON.stringify(data.slides);
     if (data.theme_config) updateData.theme_config = JSON.stringify(data.theme_config);
 
     await pb.collection("slides").update(id, updateData);
     return { success: true };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Update Deck Error:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -792,8 +793,8 @@ export async function deleteDeck(id: string) {
 
     await pb.collection("slides").update(id, { is_deleted: true });
     return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -831,8 +832,8 @@ export async function listUserDecks() {
     }));
 
     return { success: true, decks };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("List Decks Error:", JSON.stringify(error, Object.getOwnPropertyNames(error)));
-    return { success: false, error: error.message };
+    return { success: false, error: (error as Error).message };
   }
 }

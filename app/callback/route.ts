@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
     const payload = {
       grant_type: "authorization_code",
       client_id: CLIENT_ID,
-      redirect_uri: "http://localhost:3000/callback",
+      redirect_uri: `${BASE_URL}/callback`,
       code,
       code_verifier: storedVerifier,
     };

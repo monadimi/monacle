@@ -53,10 +53,10 @@ export async function createSheet(
     console.log("Creating sheet via Admin payload:", JSON.stringify(data, null, 2));
     const record = await pb.collection("sheets").create(data);
     return { success: true, id: record.id };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Create Sheet Error:", error);
-    console.error("Values:", error.response);
-    return { success: false, error: error.message };
+    // console.error("Values:", (error as any).response); // Optional: keep or comment out
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -82,9 +82,9 @@ export async function getSheet(id: string) {
       // or we can parse session again if strictly needed.
       currentUser: null 
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Get Sheet Error:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -100,9 +100,9 @@ export async function updateSheet(id: string, updates: Partial<{ title: string; 
 
     const record = await pb.collection("sheets").update(id, data);
     return { success: true };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Update Sheet Error:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -122,8 +122,8 @@ export async function listUserSheets() {
         });
         
         return { success: true, items: records.items };
-    } catch (error: any) {
-        return { success: false, error: error.message };
+    } catch (error: unknown) {
+        return { success: false, error: (error as Error).message };
     }
 }
 
@@ -134,8 +134,8 @@ export async function deleteSheet(id: string) {
         // Soft delete: set is_deleted = true
         await pb.collection("sheets").update(id, { is_deleted: true });
         return { success: true };
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("Delete Sheet Error:", error);
-        return { success: false, error: error.message };
+        return { success: false, error: (error as Error).message };
     }
 }
