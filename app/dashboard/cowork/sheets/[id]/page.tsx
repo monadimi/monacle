@@ -4,6 +4,19 @@ import { getSheet } from "@/app/actions/sheets";
 import SheetEditor from "@/components/cowork/SheetEditor";
 import { redirect } from "next/navigation";
 
+function parseJsonCookie(value?: string): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(decodeURIComponent(value));
+  } catch {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+}
+
 export default async function SheetPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const cookieStore = await cookies();
@@ -13,7 +26,10 @@ export default async function SheetPage({ params }: { params: Promise<{ id: stri
     redirect("/login");
   }
 
-  const user = JSON.parse(session.value);
+  const user = parseJsonCookie(session.value);
+  if (!user) {
+    redirect("/login");
+  }
   const { success, sheet, error } = await getSheet(id);
 
   if (!success) {
