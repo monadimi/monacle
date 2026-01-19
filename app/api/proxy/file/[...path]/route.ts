@@ -366,7 +366,7 @@ function parseJsonCookie(value?: string): Record<string, unknown> | null {
 }
 
 function resolveUserToken(
-  cookieStore: ReturnType<typeof cookies>,
+  cookieStore: Awaited<ReturnType<typeof cookies>>,
   session: Record<string, unknown> | null
 ): string | null {
   const directToken = cookieStore.get("monacle_token")?.value;
