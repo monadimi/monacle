@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { RecordModel } from "pocketbase";
+import PocketBase, { RecordModel } from "pocketbase";
 import { cookies } from "next/headers";
 import { getAdminClient } from "@/lib/admin";
 
 export const maxDuration = 300; // 5 minutes for long-running stitching
+const POCKETBASE_API_URL =
+  process.env.POCKETBASE_API_URL || "https://monadb.snowman0919.site";
 
 export async function GET(
   request: NextRequest,
@@ -30,53 +32,83 @@ export async function GET(
 
     // 1. Verify Session
     const cookieStore = await cookies();
-    const session = cookieStore.get("monacle_session");
-    const user = session?.value ? JSON.parse(decodeURIComponent(session.value)) : null;
+    const session = parseJsonCookie(cookieStore.get("monacle_session")?.value);
+    const user = session ?? null;
 
-    // 2. Admin Client (Cached)
-    const pb = await getAdminClient();
+    const userToken = resolveUserToken(cookieStore, session);
+
+    // 2. Admin Client (Cached) with safe fallback
+    let pb: PocketBase;
+    try {
+      pb = await getAdminClient();
+    } catch (err) {
+      console.error("[Proxy] Admin client unavailable, falling back:", err);
+      pb = new PocketBase(POCKETBASE_API_URL);
+    }
+    if (!pb.authStore.isValid && userToken) {
+      pb.authStore.save(userToken, {
+        collectionId: "users",
+        collectionName: "users",
+      } as RecordModel);
+    }
 
     // 3. Ownership and Sharing Check
     let record;
     try {
       record = await pb.collection(collectionId).getOne(recordId);
-
-      const isShared = record.is_shared === true || record.is_shared === "true";
-      const isOwner =
-        user && (record.owner === user.id || record.owner === user.email);
-
-      // Team Check: Resolve Team User ID
-      let teamId = "";
-      try {
-        const teamUser = await pb
-          .collection("users")
-          .getFirstListItem('email="cloud-team@monad.io.kr"');
-        teamId = teamUser.id;
-      } catch {
-        /* ignore */
-      }
-      const isTeam = user && record.owner === teamId && teamId !== "";
-
-      // Access logic:
-      // Allow if:
-      // 1. It's shared (is_shared: true)
-      // 2. User is owner
-      // 3. User is part of team
-      if (!isShared && !isOwner && !isTeam) {
-        if (!user) {
-          return new NextResponse("Unauthorized", { status: 401 });
-        }
-        console.error(
-          `Forbidden access: User ${user.id} is not owner of ${recordId} (protected)`
-        );
-        return new NextResponse("Forbidden", { status: 403 });
-      }
     } catch (err) {
+      if (collectionId !== "cloud") {
+        try {
+          console.warn(
+            `[Proxy] Collection ${collectionId} not found, retrying with cloud`
+          );
+          collectionId = "cloud";
+          record = await pb.collection(collectionId).getOne(recordId);
+        } catch (fallbackErr) {
+          console.error(
+            `Proxy GetOne Failed for ${collectionId}/${recordId}:`,
+            fallbackErr
+          );
+          return new NextResponse("Not Found", { status: 404 });
+        }
+      } else {
+        console.error(
+          `Proxy GetOne Failed for ${collectionId}/${recordId}:`,
+          err
+        );
+        return new NextResponse("Not Found", { status: 404 });
+      }
+    }
+
+    const isShared = record.is_shared === true || record.is_shared === "true";
+    const isOwner =
+      user && (record.owner === user.id || record.owner === user.email);
+
+    // Team Check: Resolve Team User ID
+    let teamId = "";
+    try {
+      const teamUser = await pb
+        .collection("users")
+        .getFirstListItem('email="cloud-team@monad.io.kr"');
+      teamId = teamUser.id;
+    } catch {
+      /* ignore */
+    }
+    const isTeam = user && record.owner === teamId && teamId !== "";
+
+    // Access logic:
+    // Allow if:
+    // 1. It's shared (is_shared: true)
+    // 2. User is owner
+    // 3. User is part of team
+    if (!isShared && !isOwner && !isTeam) {
+      if (!user) {
+        return new NextResponse("Unauthorized", { status: 401 });
+      }
       console.error(
-        `Proxy GetOne Failed for ${collectionId}/${recordId}:`,
-        err
+        `Forbidden access: User ${user.id} is not owner of ${recordId} (protected)`
       );
-      return new NextResponse("Not Found", { status: 404 });
+      return new NextResponse("Forbidden", { status: 403 });
     }
 
     // 4. Caching: Handle 304 Not Modified
@@ -140,28 +172,31 @@ export async function GET(
       };
       files.sort((a, b) => getPartNum(a) - getPartNum(b));
 
-      const fileToken = await pb.files.getToken();
+      const fileToken = await getFileTokenSafe(pb);
       const fileUrls = files.map((f: string) => {
-        const url = pb.files.getURL(record, f, { token: fileToken });
+        const url = pb.files.getURL(
+          record,
+          f,
+          fileToken ? { token: fileToken } : undefined
+        );
         console.log(`[Proxy] Generated Part URL: ${url}`);
         return url;
       });
 
       streamBody = makeStitchedStream(
         fileUrls,
-        { Authorization: pb.authStore.token },
+        pb.authStore.isValid ? { Authorization: pb.authStore.token } : {},
         files
       );
       cleanName = cleanName.replace(/\.part\d+.*$/, "");
     } else {
-      const fileToken = await pb.files.getToken();
-      const fileUrl = pb.files.getURL(
-        record,
-        filename,
-        thumb ? { thumb, token: fileToken } : { token: fileToken }
-      );
+      const fileToken = await getFileTokenSafe(pb);
+      const fileUrl = pb.files.getURL(record, filename, {
+        ...(thumb ? { thumb } : {}),
+        ...(fileToken ? { token: fileToken } : {}),
+      });
       const response = await fetch(fileUrl, {
-        headers: { Authorization: pb.authStore.token },
+        headers: pb.authStore.isValid ? { Authorization: pb.authStore.token } : {},
       });
       console.log(`[Proxy] Fetching file from: ${fileUrl}`);
 
@@ -315,4 +350,44 @@ function makeThrottledStream(
       reader.cancel();
     },
   });
+}
+
+function parseJsonCookie(value?: string): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(decodeURIComponent(value));
+  } catch {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function resolveUserToken(
+  cookieStore: Awaited<ReturnType<typeof cookies>>,
+  session: Record<string, unknown> | null
+): string | null {
+  const directToken = cookieStore.get("monacle_token")?.value;
+  if (directToken) return directToken;
+
+  const sessionToken =
+    typeof session?.token === "string" ? session.token : null;
+  if (sessionToken) return sessionToken;
+
+  const pbAuth = parseJsonCookie(cookieStore.get("pb_auth")?.value);
+  const pbAuthToken = typeof pbAuth?.token === "string" ? pbAuth.token : null;
+  if (pbAuthToken) return pbAuthToken;
+
+  return null;
+}
+
+async function getFileTokenSafe(pb: PocketBase): Promise<string | null> {
+  try {
+    return await pb.files.getToken();
+  } catch (error) {
+    console.error("[Proxy] Failed to get file token:", error);
+    return null;
+  }
 }
