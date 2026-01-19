@@ -4,6 +4,19 @@ import { getDeck } from "@/app/actions/cowork";
 import SlideEditor from "@/components/cowork/SlideEditor";
 import { redirect } from "next/navigation";
 
+function parseJsonCookie(value?: string): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(decodeURIComponent(value));
+  } catch {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+}
+
 export default async function SlidePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const cookieStore = await cookies();
@@ -13,7 +26,10 @@ export default async function SlidePage({ params }: { params: Promise<{ id: stri
     redirect("/login");
   }
 
-  const user = JSON.parse(session.value);
+  const user = parseJsonCookie(session.value);
+  if (!user) {
+    redirect("/login");
+  }
   const { success, deck, error } = await getDeck(id);
 
   if (!success) {

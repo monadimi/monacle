@@ -4,6 +4,19 @@ import { cookies } from "next/headers";
 import { getAdminClient } from "@/lib/admin";
 import PocketBase from "pocketbase";
 
+function parseJsonCookie(value?: string): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(decodeURIComponent(value));
+  } catch {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+}
+
 // Server Action to Create a New Form
 export async function createForm(
   title: string = "새로운 설문지",
@@ -804,7 +817,8 @@ export async function listUserDecks() {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = parseJsonCookie(session.value);
+    if (!user || typeof user.id !== "string") throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
     
