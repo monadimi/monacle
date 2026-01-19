@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
     if (!session?.value) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const formData = await request.formData();
     const isTeam = formData.get("isTeam") === "true";

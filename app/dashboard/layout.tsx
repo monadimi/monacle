@@ -14,7 +14,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
 
   let user;
   try {
-    user = JSON.parse(session.value);
+    user = JSON.parse(decodeURIComponent(session.value));
   } catch {
     redirect("/");
   }

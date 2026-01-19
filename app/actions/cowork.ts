@@ -13,7 +13,7 @@ export async function createForm(
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
 
@@ -170,7 +170,7 @@ export async function listUserForms() {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
     
@@ -195,7 +195,7 @@ export async function getFormResponses(formId: string) {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
 
@@ -268,7 +268,7 @@ export async function createDoc(
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
 
@@ -324,7 +324,7 @@ export async function deleteDoc(id: string) {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
     const doc = await pb.collection("docs").getOne(id);
@@ -351,7 +351,7 @@ export async function updateDoc(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    const user = session?.value ? JSON.parse(session.value) : null;
+    const user = session?.value ? JSON.parse(decodeURIComponent(session.value)) : null;
 
     const pb = await getAdminClient();
 
@@ -397,7 +397,7 @@ export async function listUserDocs(parentId: string | null = null) {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
 
@@ -433,7 +433,7 @@ export async function toggleSharing(
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
     const record = await pb.collection(collection).getOne(id);
@@ -460,7 +460,7 @@ export async function createBoard(
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
 
@@ -529,7 +529,7 @@ export async function updateBoard(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    const user = session?.value ? JSON.parse(session.value) : null;
+    const user = session?.value ? JSON.parse(decodeURIComponent(session.value)) : null;
     if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
@@ -572,7 +572,7 @@ export async function deleteBoard(id: string) {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
     const board = await pb.collection("boards").getOne(id);
@@ -590,7 +590,7 @@ export async function listUserBoards() {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
     
@@ -626,7 +626,7 @@ export async function uploadBoardImage(boardId: string, formData: FormData) {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
     
@@ -753,7 +753,7 @@ export async function updateDeck(
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
     
@@ -785,7 +785,7 @@ export async function deleteDeck(id: string) {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     const pb = await getAdminClient();
     const record = await pb.collection("slides").getOne(id);

@@ -35,7 +35,7 @@ export async function createSheet(
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
     if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = JSON.parse(decodeURIComponent(session.value));
 
     // Use Admin Client which works reliably
     const pb = await getAdminClient();
@@ -112,7 +112,7 @@ export async function listUserSheets() {
         const cookieStore = await cookies();
         const session = cookieStore.get("monacle_session");
         if (!session?.value) return { success: true, items: [] };
-        const user = JSON.parse(session.value);
+        const user = JSON.parse(decodeURIComponent(session.value));
 
         const pb = await getAdminClient();
     

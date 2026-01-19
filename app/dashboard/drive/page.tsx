@@ -12,7 +12,7 @@ export default async function DrivePage() {
 
   let user;
   try {
-    user = JSON.parse(session.value);
+    user = JSON.parse(decodeURIComponent(session.value));
   } catch {
     redirect("/");
   }
