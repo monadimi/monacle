@@ -29,8 +29,9 @@ export function FileDetailModal({
 
   const rawFile = file && 'file' in file ? (Array.isArray(file.file) ? file.file[0] : file.file) : null;
 
+  const collectionKey = file?.collectionName || file?.collectionId || "cloud";
   const fileUrl = rawFile
-    ? `/api/proxy/file/${file?.collectionId}/${file?.id}/${rawFile}?v=${timestamp}`
+    ? `/api/proxy/file/${collectionKey}/${file?.id}/${rawFile}?v=${timestamp}`
     : null;
 
   const ext = rawFile?.split('.').pop()?.toLowerCase();

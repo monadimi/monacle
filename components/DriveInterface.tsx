@@ -578,7 +578,8 @@ export default function DriveInterface({ user }: { user: { id: string; email: st
     if (Array.isArray(rawFile)) rawFile = rawFile[0];
     if (!rawFile) return;
 
-    const url = `/api/proxy/file/${file.collectionId}/${file.id}/${rawFile}?filename=${encodeURIComponent(file.name || rawFile.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1'))}`;
+    const collectionKey = file.collectionName || file.collectionId || "cloud";
+    const url = `/api/proxy/file/${collectionKey}/${file.id}/${rawFile}?filename=${encodeURIComponent(file.name || rawFile.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1'))}`;
     const link = document.createElement('a');
     link.href = url;
     link.download = file.name || rawFile.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1');
@@ -1018,7 +1019,8 @@ function FileCard({ file, viewMode, onDelete, onShare, onMove, onRename, onClick
   const rawFile = Array.isArray(file.file) ? file.file[0] : file.file;
 
   const timestamp = new Date(file.updated).getTime();
-  const fileUrl = rawFile ? `/api/proxy/file/${file.collectionId}/${file.id}/${rawFile}?thumb=400x500&v=${timestamp}` : null;
+  const collectionKey = file.collectionName || file.collectionId || "cloud";
+  const fileUrl = rawFile ? `/api/proxy/file/${collectionKey}/${file.id}/${rawFile}?thumb=400x500&v=${timestamp}` : null;
   const isImage = rawFile?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
   const displayName = file.name || rawFile?.replace(/_[a-z0-9]+\.([^.]+)$/i, '.$1') || "Untitled";
 
