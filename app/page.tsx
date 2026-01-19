@@ -1,49 +1,47 @@
-import crypto from "crypto";
-import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
+"use client";
+
+import { useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { ArrowRight } from "lucide-react";
+import { startLogin } from "./actions/auth";
 
 export default function LoginPage() {
-  const startLogin = async () => {
-    "use server";
+  const searchParams = useSearchParams();
+  const error = searchParams.get("error");
 
-    const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-    const CLIENT_ID = process.env.MONAD_CLIENT_ID || "MONACLE_DEV"; // Placeholder
+  useEffect(() => {
+    const timestamp = new Date().toISOString();
+    console.group(`[Monacle Debug] ${timestamp}`);
+    console.log("Current URL:", window.location.href);
+    console.log("URL Search Params:", Object.fromEntries(searchParams.entries()));
+    console.log("Document Domain:", document.domain);
+    console.log("Referrer:", document.referrer);
+    
+    // Detailed Cookie Check
+    const cookies = document.cookie.split(';').map(c => c.trim()).filter(Boolean);
+    console.log("Client-Accessible Cookies:", cookies.length > 0 ? cookies : "None found");
+    
+    if (error) {
+      console.error("Critical Auth Error:", error);
+      // Detailed error mapping if known
+      const errorMap: Record<string, string> = {
+        'state_mismatch': 'CSRF protection failed: state in cookie does not match the one from ID provider.',
+        'no_code_or_verifier': 'Cookie loss: verifier or code is missing. Possibly due to SameSite=Lax or Secure/HTTP requirements.',
+        'token_exchange_failed': 'Server-side failure: Monacle server could not exchange the code for a token.',
+        'user_fetch_failed': 'API failure: Logged in but failed to fetch detailed user profile.',
+        'unauthorized_type': 'Access denied: User type is not "monad".',
+        'unauthorized_domain': 'Access denied: Email domain is not "@monad.io.kr".',
+      };
+      if (errorMap[error]) {
+        console.warn("Error Explanation:", errorMap[error]);
+      }
+    }
+    console.groupEnd();
+  }, [searchParams, error]);
 
-    // 1. PKCE Generation
-    const verifier = base64URLEncode(crypto.randomBytes(32));
-    const challenge = base64URLEncode(
-      crypto.createHash("sha256").update(verifier).digest()
-    );
-    const state = base64URLEncode(crypto.randomBytes(16));
-
-    // 2. Store verifier in cookie for callback verification
-    const cookieStore = await cookies();
-    cookieStore.set("verifier", verifier, { 
-      httpOnly: true, 
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      sameSite: "lax"
-    });
-    cookieStore.set("state", state, { 
-      httpOnly: true, 
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      sameSite: "lax"
-    });
-
-    // 3. Redirect to Monad ID
-    const params = new URLSearchParams({
-      client_id: CLIENT_ID,
-      redirect_uri: `${BASE_URL}/callback`,
-      response_type: "code",
-      scope: "email name type",
-      state: state,
-      code_challenge: challenge,
-      code_challenge_method: "S256",
-    });
-
-    redirect(`https://id.monad.io.kr/authorize?${params}`);
+  const handleLogin = async () => {
+    console.log("[Monacle] Starting Login Flow...");
+    await startLogin();
   };
 
   return (
@@ -64,7 +62,13 @@ export default function LoginPage() {
           Secure cloud storage for the <span className="font-semibold text-indigo-600">Monad</span> team.
         </p>
 
-        <form action={startLogin} className="w-full">
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-100 text-red-600 rounded-xl text-sm font-medium">
+            Authentication Error: {error}
+          </div>
+        )}
+
+        <form action={handleLogin} className="w-full">
           <button
             type="submit"
             className="w-full bg-slate-900 hover:bg-black text-white font-bold h-14 rounded-2xl transition-all active:scale-[0.98] shadow-xl shadow-slate-900/20 flex items-center justify-center gap-2 group"
@@ -80,12 +84,4 @@ export default function LoginPage() {
       </div>
     </main>
   );
-}
-
-function base64URLEncode(str: Buffer) {
-  return str
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=/g, "");
 }

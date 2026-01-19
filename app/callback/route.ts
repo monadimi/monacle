@@ -37,11 +37,16 @@ export async function GET(req: NextRequest) {
   const storedVerifier = cookieStore.get("verifier")?.value;
   const storedState = cookieStore.get("state")?.value;
 
+  console.log("[Callback] Request Params:", { code: !!code, state, error });
+  console.log("[Callback] Stored Cookies:", { verifier: !!storedVerifier, state: storedState });
+
   if (!state || !storedState || state !== storedState) {
+    console.error("[Callback] State mismatch:", { received: state, stored: storedState });
     return NextResponse.redirect(new URL("/?error=state_mismatch", baseUrl));
   }
 
   if (!code || !storedVerifier) {
+    console.error("[Callback] Missing code or verifier:", { code: !!code, verifier: !!storedVerifier });
     return NextResponse.redirect(
       new URL("/?error=no_code_or_verifier", baseUrl)
     );
@@ -120,7 +125,9 @@ export async function GET(req: NextRequest) {
     
     try {
       pbUser = await pb.collection("users").getFirstListItem(`email="${userData.email}"`);
+      console.log("[Callback] Found existing PB user:", pbUser.id);
     } catch {
+      console.log("[Callback] PB user not found, creating one...");
       // Create user if not exists
       const randomPassword = Math.random().toString(36).slice(-12) + Math.random().toString(36).slice(-12);
       pbUser = await pb.collection("users").create({
@@ -131,6 +138,7 @@ export async function GET(req: NextRequest) {
         emailVisibility: true,
         type: "monad",
       });
+      console.log("[Callback] Created new PB user:", pbUser.id);
     }
 
     const isProd = process.env.NODE_ENV === "production";
