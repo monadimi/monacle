@@ -42,3 +42,4 @@ lint_log*
 next-env.d.ts
 
 .agent/*
+AGENTS.md

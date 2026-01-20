@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { getAdminClient } from "@/lib/admin";
+import { verifySession } from "@/lib/session";
 
 export async function GET(request: NextRequest) {
   try {
@@ -21,7 +22,7 @@ export async function GET(request: NextRequest) {
       $autoCancel: false,
     });
 
-    const items = allItems.filter(i => i.board_id === boardId);
+    const items = allItems.filter((i) => i.board_id === boardId);
 
     return NextResponse.json({ items }, { status: 200 });
   } catch (error: unknown) {
@@ -37,7 +38,10 @@ export async function POST(request: NextRequest) {
     if (!session?.value) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session.value);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
     const body = await request.json();
     const boardId = body?.boardId;
@@ -80,7 +84,10 @@ export async function DELETE(request: NextRequest) {
     if (!session?.value) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session.value);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
     const { searchParams } = new URL(request.url);
     const boardId = searchParams.get("boardId");

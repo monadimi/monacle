@@ -10,6 +10,21 @@ const DropdownMenuContext = React.createContext<{
   setTriggerRect: React.Dispatch<React.SetStateAction<DOMRect | null>>;
 } | null>(null);
 
+// Helper to manage checking and setting refs safely
+function setRef<T>(ref: React.Ref<T> | undefined, value: T | null) {
+  if (typeof ref === "function") {
+    ref(value);
+  } else if (ref && typeof ref === "object" && "current" in ref) {
+    (ref as React.MutableRefObject<T | null>).current = value;
+  }
+}
+
+function composeRefs<T>(...refs: (React.Ref<T> | undefined)[]) {
+  return (node: T | null) => {
+    refs.forEach((ref) => setRef(ref, node));
+  };
+}
+
 export const DropdownMenu = ({ children }: { children: React.ReactNode }) => {
   const [open, setOpen] = React.useState(false);
   const [triggerRect, setTriggerRect] = React.useState<DOMRect | null>(null);
@@ -58,25 +73,11 @@ export const DropdownMenuTrigger = ({ children, asChild }: { children: React.Rea
 
   if (asChild && React.isValidElement(children)) {
     // Determine the child's ref type to properly forward it
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const childCmp = children as React.ReactElement<any>;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const childRef = (childCmp as any).ref;
 
     return React.cloneElement(childCmp, {
-      ref: (node: HTMLDivElement | null) => {
-        // Handle existing ref if any
-        if (typeof childRef === 'function') {
-          childRef(node);
-        } else if (childRef && typeof childRef === 'object' && 'current' in childRef) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (childRef as React.MutableRefObject<any>).current = node;
-        }
-
-        // Handle local ref
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (ref as React.MutableRefObject<any>).current = node;
-      },
+      ref: composeRefs(childRef, ref),
       onClick: (e: React.MouseEvent) => {
         childCmp.props.onClick?.(e);
         toggle(e);
@@ -117,7 +118,6 @@ export const DropdownMenuContent = ({
   if (!ctx || !ctx.open || !ctx.triggerRect || !mounted) return null;
 
   const rect = ctx.triggerRect;
-  // eslint-disable-next-line prefer-const
   let top = side === 'bottom' ? rect.bottom + sideOffset : rect.top - sideOffset;
   const left = align === 'start' ? rect.left : align === 'end' ? rect.right : rect.left + rect.width / 2;
 

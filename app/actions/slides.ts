@@ -8,6 +8,7 @@
 
 import { cookies } from "next/headers";
 import { getAdminClient } from "@/lib/admin";
+import { verifySession } from "@/lib/session";
 
 export async function createDeck(
   title: string = "새 프레젠테이션",
@@ -16,8 +17,8 @@ export async function createDeck(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(session.value);
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 
@@ -107,8 +108,8 @@ export async function updateDeck(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 
@@ -139,8 +140,8 @@ export async function listUserDecks() {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 
@@ -163,8 +164,8 @@ export async function deleteDeck(id: string) {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
     const record = await pb.collection("slides").getOne(id);

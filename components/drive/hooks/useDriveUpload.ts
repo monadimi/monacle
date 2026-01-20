@@ -74,7 +74,6 @@ export function useDriveUpload({
           xhr.send(formData);
         });
       } catch (err: unknown) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const requestError = err as { status: number; message: string };
         const shouldRetry =
           requestError.status === 0 ||
@@ -121,7 +120,6 @@ export function useDriveUpload({
         );
         if (!folderRes.success)
           throw new Error("Folder creation failed. Aborting upload.");
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         targetFolderId = (folderRes.folder as any).id;
       }
 
@@ -160,11 +158,9 @@ export function useDriveUpload({
               setUploadProgress((prev) =>
                 prev ? { ...prev, loaded: currentTotal } : null,
               );
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
             })) as { id: string; record: FileRecord };
 
             if (chunkIdx === 0) {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               recordId = (result as any).record.id;
             }
           }
@@ -194,7 +190,6 @@ export function useDriveUpload({
       }
     } catch (err: unknown) {
       console.error("Upload failed", err);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       alert(`업로드 실패: ${(err as any).message || "Unknown error"}`);
     } finally {
       setUploadProgress(null);

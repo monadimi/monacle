@@ -8,8 +8,8 @@
 
 import { cookies } from "next/headers";
 import { getAdminClient } from "@/lib/admin";
+import { verifySession } from "@/lib/session";
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 export async function createBoard(
   title: string = "제목 없는 보드",
   elements: any[] = [],
@@ -17,8 +17,8 @@ export async function createBoard(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 
@@ -42,8 +42,19 @@ export async function createBoard(
 
 export async function getBoard(id: string) {
   try {
+    const cookieStore = await cookies();
+    const session = cookieStore.get("monacle_session");
+    const user = await verifySession(session?.value);
+
     const pb = await getAdminClient();
     const record = await pb.collection("boards").getOne(id);
+
+    const isOwner = user && record.author === user.id;
+    const isShared = record.is_shared;
+
+    if (!isShared && !isOwner) {
+      throw new Error("Forbidden: You do not have access to this board");
+    }
 
     let elements = record.elements;
     if (typeof elements === "string") {
@@ -87,9 +98,7 @@ export async function updateBoard(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    const user = session?.value
-      ? JSON.parse(decodeURIComponent(session.value))
-      : null;
+    const user = await verifySession(session?.value);
     if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
@@ -138,8 +147,8 @@ export async function deleteBoard(id: string) {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
     const board = await pb.collection("boards").getOne(id);
@@ -156,8 +165,8 @@ export async function listUserBoards() {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 
@@ -196,8 +205,8 @@ export async function uploadBoardImage(boardId: string, formData: FormData) {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 

@@ -8,6 +8,7 @@
 
 import { cookies } from "next/headers";
 import { getAdminClient } from "@/lib/admin";
+import { verifySession } from "@/lib/session";
 
 export async function createDoc(
   title: string = "제목 없는 문서",
@@ -17,8 +18,8 @@ export async function createDoc(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 
@@ -44,8 +45,19 @@ export async function createDoc(
 
 export async function getDoc(id: string) {
   try {
+    const cookieStore = await cookies();
+    const session = cookieStore.get("monacle_session");
+    const user = await verifySession(session?.value);
+
     const pb = await getAdminClient();
     const record = await pb.collection("docs").getOne(id);
+
+    const isOwner = user && record.author === user.id;
+    const isShared = record.is_shared;
+
+    if (!isShared && !isOwner) {
+      throw new Error("Forbidden: You do not have access to this document");
+    }
 
     return {
       success: true,
@@ -73,8 +85,8 @@ export async function deleteDoc(id: string) {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
     const doc = await pb.collection("docs").getOne(id);
@@ -101,9 +113,7 @@ export async function updateDoc(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    const user = session?.value
-      ? JSON.parse(decodeURIComponent(session.value))
-      : null;
+    const user = await verifySession(session?.value);
 
     const pb = await getAdminClient();
 
@@ -154,8 +164,8 @@ export async function listUserDocs(parentId: string | null = null) {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 
@@ -190,8 +200,8 @@ export async function toggleSharing(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
     const record = await pb.collection(collection).getOne(id);

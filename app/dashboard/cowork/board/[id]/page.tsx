@@ -10,18 +10,7 @@ type UserSession = {
   avatar?: string;
 };
 
-function parseUserCookie(value?: string): UserSession | null {
-  if (!value) return null;
-  try {
-    return JSON.parse(decodeURIComponent(value));
-  } catch {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return null;
-    }
-  }
-}
+import { verifySession } from "@/lib/session";
 
 export default async function BoardPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -36,7 +25,7 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
 
   const cookieStore = await cookies();
   const session = cookieStore.get("monacle_session");
-  const user = parseUserCookie(session?.value);
+  const user = await verifySession(session?.value);
 
   if (!user || !user.id || !user.email || !user.name) {
     redirect("/");

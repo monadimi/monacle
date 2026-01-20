@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import PocketBase, { RecordModel } from "pocketbase";
 import { cookies } from "next/headers";
 import { getAdminClient } from "@/lib/admin";
+import { verifySession } from "@/lib/session";
 
 export const maxDuration = 300; // 5 minutes for long-running stitching
 const POCKETBASE_API_URL =
@@ -39,10 +40,10 @@ export async function GET(
 
     // 1. Verify Session
     const cookieStore = await cookies();
-    const session = parseJsonCookie(cookieStore.get("monacle_session")?.value);
-    const user = session ?? null;
+    const sessionCookie = cookieStore.get("monacle_session");
+    const user = await verifySession(sessionCookie?.value);
 
-    const userToken = resolveUserToken(cookieStore, session);
+    const userToken = resolveUserToken(cookieStore, user);
 
     // 2. Admin Client (Cached) with safe fallback
     let pb: PocketBase;
@@ -333,7 +334,6 @@ function makeStitchedStream(
   });
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeThrottledStream(
   inputStream: ReadableStream<Uint8Array> | any,
   bytesPerSecond: number,

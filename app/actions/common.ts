@@ -39,7 +39,6 @@ export async function getOrCreateTeamUser(pb: PocketBase) {
         setCachedTeamId(user.id);
         return user.id;
       } catch {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         console.error(
           "Team User Creation Error Details:",
           (createError as any).data,

@@ -11,7 +11,6 @@ export interface FileRecord {
   folder?: string;
   is_shared?: boolean;
   share_type?: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   expand?: any;
   short_id?: string;
 }

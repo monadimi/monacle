@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { getAdminClient, getTeamUserId, setCachedTeamId } from "@/lib/admin";
+import { verifySession } from "@/lib/session";
 import PocketBase from "pocketbase";
 
 export const maxDuration = 300; // 5 minutes for large chunk handling
@@ -62,7 +63,10 @@ export async function POST(request: NextRequest) {
     if (!session?.value) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session.value);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
     const formData = await request.formData();
     const isTeam = formData.get("isTeam") === "true";
@@ -107,7 +111,7 @@ export async function POST(request: NextRequest) {
       const existing = await pb.collection("cloud").getOne(recordId);
       if (existing.owner !== ownerId) {
         console.error(
-          `[Upload] Forbidden: User ${ownerId} tried to update record owned by ${existing.owner}`
+          `[Upload] Forbidden: User ${ownerId} tried to update record owned by ${existing.owner}`,
         );
         return NextResponse.json({ error: "Access denied" }, { status: 403 });
       }
@@ -117,7 +121,7 @@ export async function POST(request: NextRequest) {
 
       console.log(
         `[Upload] Appending to record ${recordId}. Current files:`,
-        existingFiles
+        existingFiles,
       );
 
       if (existingFiles) {

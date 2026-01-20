@@ -7,6 +7,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import LoginInterface from "@/components/LoginInterface";
+import { verifySession } from "@/lib/session";
 
 export default async function LoginPage() {
   const cookieStore = await cookies();
@@ -20,7 +21,7 @@ export default async function LoginPage() {
 
   if (session?.value) {
     try {
-      const parsed = JSON.parse(decodeURIComponent(session.value));
+      const parsed = await verifySession(session.value);
       if (parsed?.token) {
         redirect("/dashboard");
       }

@@ -8,6 +8,7 @@
 
 import { cookies } from "next/headers";
 import { getAdminClient } from "@/lib/admin";
+import { verifySession } from "@/lib/session";
 
 export async function createForm(
   title: string = "새로운 설문지",
@@ -16,8 +17,8 @@ export async function createForm(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 
@@ -46,8 +47,28 @@ export async function createForm(
 
 export async function getForm(id: string) {
   try {
+    const cookieStore = await cookies();
+    const session = cookieStore.get("monacle_session");
+    const user = await verifySession(session?.value);
+
     const pb = await getAdminClient();
     const record = await pb.collection("forms").getOne(id);
+
+    // Access Logic:
+    // 1. Owner (Edit/View)
+    // 2. Shared (Edit/View)
+    // 3. Active (Public View/Respond)
+    // If not Active, and not Owner/Shared -> Forbidden (Draft Protection)
+
+    const isOwner = user && record.author === user.id;
+    const isShared = record.is_shared;
+    const isActive = record.isActive;
+
+    if (!isActive && !isOwner && !isShared) {
+      throw new Error(
+        "Forbidden: This form is not public and you do not have access.",
+      );
+    }
 
     // Parse questions from JSON
     let questions = record.questions;
@@ -78,7 +99,6 @@ export async function getForm(id: string) {
   }
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 export async function updateForm(
   id: string,
   data: {
@@ -90,8 +110,8 @@ export async function updateForm(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 
@@ -120,8 +140,8 @@ export async function deleteForm(id: string) {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
     const form = await pb.collection("forms").getOne(id);
@@ -169,8 +189,8 @@ export async function listUserForms() {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 
@@ -193,8 +213,8 @@ export async function getFormResponses(formId: string) {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 
@@ -238,8 +258,8 @@ export async function toggleFormStatus(formId: string, isActive: boolean) {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 
