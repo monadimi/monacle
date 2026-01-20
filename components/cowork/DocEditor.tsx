@@ -1,3 +1,10 @@
+/**
+ * @file components/cowork/DocEditor.tsx
+ * @purpose Collaborative document editor with rich text capabilities.
+ * @scope Rich Text (TipTap), Real-time Sync (via PocketBase), Presence (Who is viewing), Page Layout.
+ * @out-of-scope File Management (handled by Drive), Permissions (handled by CoworkInterface).
+ * @failure-behavior Alerts on critical save failures. Gracefully handles network disconnects.
+ */
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -62,6 +69,7 @@ import pb from "@/lib/pocketbase";
 import { Step } from "prosemirror-transform";
 
 import { Page, CustomDoc } from "@/lib/tiptap-paging";
+import { usePresence } from "./hooks/usePresence";
 
 const lowlight = createLowlight(common);
 
@@ -97,7 +105,7 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
   const [shareType, setShareType] = useState<"view" | "edit">(initialData.share_type === "edit" ? "edit" : "view");
   const [shareTeam, setShareTeam] = useState(!!initialData.share_team);
   const [isSidebarOpen, setIsSidebarOpen] = useState(!readOnly);
-  const [activeEditors, setActiveEditors] = useState<Array<{ userId: string; name: string; avatarUrl?: string; updated: string }>>([]);
+  const { activeEditors } = usePresence(docId, currentUser, 'doc');
 
   const [tVersion, setTVersion] = useState(initialData.tVersion || 0);
   const [pageCount, setPageCount] = useState(1);
@@ -140,7 +148,7 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
           readOnly && "cursor-default"
         ),
       },
-       handleKeyDown: (view, event) => {
+      handleKeyDown: () => {
         if (readOnly) return true;
         // Optimization: Handle enter/delete for pagination
         return false;
@@ -168,7 +176,7 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
     return `https://monadb.snowman0919.site/api/files/users/${user.id}/${user.avatar}`;
   }, []);
 
-  const buildEditorChip = useCallback((user: any) => ({
+  const buildEditorChip = useCallback((user: { id: string; name?: string; email?: string; avatar?: string }) => ({
     userId: user.id,
     name: user.name || user.email || "User",
     avatarUrl: buildAvatarUrl({ id: user.id, avatar: user.avatar }),
@@ -187,23 +195,26 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
   const versionRef = useRef(tVersion);
   const pendingUpdates = useRef<{ title?: string, content?: string }>({});
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
-  
+
   useEffect(() => { titleRef.current = title; }, [title]);
   useEffect(() => { saveStatusRef.current = saveStatus; }, [saveStatus]);
   useEffect(() => { versionRef.current = tVersion; }, [tVersion]);
   useEffect(() => {
     const user = currentUser as { token: string } | null;
     if (user?.token) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       pb.authStore.save(user.token, currentUser as any);
     }
   }, [currentUser]);
 
   useEffect(() => {
     if (!editor || readOnly) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleTransaction = ({ transaction }: { transaction: any }) => {
       if (!transaction.docChanged) return;
       if (isApplyingRemoteRef.current) return;
       if (!transaction.steps?.length) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       pendingStepsRef.current.push(...transaction.steps.map((step: any) => step.toJSON()));
     };
     editor.on("transaction", handleTransaction);
@@ -213,80 +224,11 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
   }, [editor, readOnly]);
 
   useEffect(() => {
-    if (!currentUser?.id) return;
-    const localEditor = buildEditorChip(currentUser);
-    setActiveEditors((prev) => {
-      const filtered = prev.filter((item) => item.userId !== localEditor.userId);
-      return [localEditor, ...filtered];
-    });
-
-    const mergeEditors = (items: Array<{ userId: string; name: string; avatarUrl?: string; updated: string }>) => {
-      const deduped = new Map<string, { userId: string; name: string; avatarUrl?: string; updated: string }>();
-      for (const item of items) {
-        if (!deduped.has(item.userId)) {
-          deduped.set(item.userId, item);
-        }
-      }
-      return Array.from(deduped.values());
-    };
-
-    const fetchPresenceList = async () => {
-      try {
-        const res = await fetch(`/api/presence?docId=${docId}`, {
-          method: "GET",
-          cache: "no-store",
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        const next = (data.items || []).map((record: any) => ({
-          userId: record.user_id,
-          name: record.name || "User",
-          avatarUrl: buildAvatarUrl({ id: record.user_id, avatar: record.avatar }),
-          updated: record.updated,
-        }));
-        const merged = mergeEditors([localEditor, ...next]);
-        setActiveEditors(merged);
-      } catch {
-        // ignore
-      }
-    };
-
-    const upsertPresence = async () => {
-      try {
-        await fetch("/api/presence", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ docId }),
-        });
-      } catch {
-        // ignore
-      }
-    };
-
-    const cleanupStale = () => {
-      const cutoff = Date.now() - 30000;
-      setActiveEditors((prev) =>
-        mergeEditors(prev).filter((item) => {
-          const updatedAt = Date.parse(item.updated || "");
-          return Number.isNaN(updatedAt) || updatedAt >= cutoff;
-        })
-      );
-    };
-
-    fetchPresenceList();
-    upsertPresence();
-
-    const heartbeat = setInterval(upsertPresence, 12000);
-    const listRefresh = setInterval(fetchPresenceList, 6000);
-    const cleanupTimer = setInterval(cleanupStale, 15000);
-
-    return () => {
-      clearInterval(heartbeat);
-      clearInterval(listRefresh);
-      clearInterval(cleanupTimer);
-      fetch(`/api/presence?docId=${docId}`, { method: "DELETE", keepalive: true }).catch(() => {});
-    };
-  }, [currentUser, docId, buildAvatarUrl, buildEditorChip]);
+    if (editor && !readOnly) {
+      // Optional: Notify presence that we are typing/active if we wanted to track "typing..." state
+      // usePresence handles general "online" state automatically.
+    }
+  }, [editor, readOnly]);
 
   // Save Protection (Data Loss Prevention)
   useEffect(() => {
@@ -304,13 +246,13 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
   const debouncedSave = useCallback((updates: { title?: string, content?: string }) => {
     setSaveStatus("saving");
     pendingUpdates.current = { ...pendingUpdates.current, ...updates };
-    
+
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 
     saveTimerRef.current = setTimeout(async () => {
       const currentUpdates = { ...pendingUpdates.current };
-      pendingUpdates.current = {}; 
-      
+      pendingUpdates.current = {};
+
       const nextVersion = versionRef.current + 1;
       const res = await updateDoc(docId, {
         title: currentUpdates.title || titleRef.current,
@@ -324,15 +266,15 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
         setSaveStatus("saved");
         setTVersion(nextVersion);
         pendingStepsRef.current = [];
-      } else if ((res as any).conflict) {
+      } else if ((res as { conflict?: boolean; latestDoc?: Doc }).conflict && (res as { latestDoc?: Doc }).latestDoc) {
         setSaveStatus("saving");
-        const latest = (res as any).latestDoc;
+        const latest = (res as { latestDoc: Doc }).latestDoc;
         const stepsToReapply = [...pendingStepsRef.current];
         pendingStepsRef.current = [];
 
         runRemoteApply(() => {
           if (editor) {
-             editor.commands.setContent(ensurePaging(latest.content), { emitUpdate: true });
+            editor.commands.setContent(ensurePaging(latest.content), { emitUpdate: true });
           }
         });
         setTVersion(latest.tVersion);
@@ -341,6 +283,7 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
           const { state, view } = editor;
           let tr = state.tr;
           let appliedSteps = 0;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const reappliedSteps: any[] = [];
           for (const stepJson of stepsToReapply) {
             try {
@@ -389,6 +332,7 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
     return null;
   }, [editor]);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const isPageEmpty = useCallback((node: any) => {
     if (node.childCount !== 1) return false;
     const child = node.firstChild;
@@ -519,8 +463,8 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
   }, []);
 
   useEffect(() => {
-    if (!editor) return; 
-    
+    if (!editor) return;
+
     // Subscribe to all changes to this document
     pb.collection("docs").subscribe(docId, (e) => {
       if (e.action === "update") {
@@ -576,7 +520,7 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
     const nextShared = !isShared || forceType !== undefined || forceTeam !== undefined;
     const nextType = forceType || shareType;
     const nextTeam = forceTeam !== undefined ? forceTeam : shareTeam;
-    
+
     const res = await toggleSharing("docs", docId, nextShared, nextType, nextTeam);
     if (res.success) {
       setIsShared(nextShared);
@@ -597,8 +541,9 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "image/*";
-    input.onchange = async (e: any) => {
-      const file = e.target.files[0];
+    input.onchange = async (e: Event) => {
+      const target = e.target as HTMLInputElement;
+      const file = target.files?.[0];
       if (!file) return;
       setSaveStatus("saving");
       try {
@@ -614,7 +559,7 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
           editor.chain().focus().setImage({ src: proxiedUrl }).run();
           setSaveStatus("saved");
         }
-      } catch (err) {
+      } catch {
         setSaveStatus("error");
       }
     };
@@ -809,9 +754,9 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
               </button>
 
               <div className="w-px h-5 bg-slate-100 mx-2" />
-              
-              <button 
-                onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} 
+
+              <button
+                onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
                 className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 transition-all"
                 title="표 삽입 (3x3)"
               >
@@ -820,42 +765,44 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                   <button className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 transition-all" title="내보내기">
-                      <Download className="w-4 h-4" />
-                   </button>
+                  <button className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 transition-all" title="내보내기">
+                    <Download className="w-4 h-4" />
+                  </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-40 z-[1000] bg-white rounded-xl shadow-xl border-slate-200">
-                   <DropdownMenuItem onClick={() => {
-                      try {
-                        console.log("Exporting Markdown...");
-                        console.log("Editor Storage:", editor.storage);
-                        console.log("Markdown Extension:", (editor.storage as any).markdown);
-                        const md = (editor.storage as any).markdown?.getMarkdown();
-                        console.log("Generated Markdown:", md);
-                        
-                        if (!md) {
-                          alert("Markdown content is empty. Check console for details.");
-                          return;
-                        }
+                  <DropdownMenuItem onClick={() => {
+                    try {
+                      console.log("Exporting Markdown...");
+                      console.log("Editor Storage:", editor.storage);
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      console.log("Markdown Extension:", (editor.storage as any).markdown);
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      const md = (editor.storage as any).markdown?.getMarkdown();
+                      console.log("Generated Markdown:", md);
 
-                        const blob = new Blob([md], { type: "text/markdown" });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement("a");
-                        a.href = url;
-                        a.download = `${title || "document"}.md`;
-                        a.click();
-                        URL.revokeObjectURL(url);
-                      } catch (e) {
-                        console.error("Markdown export failed:", e);
-                        alert("Export failed: " + e);
+                      if (!md) {
+                        alert("Markdown content is empty. Check console for details.");
+                        return;
                       }
-                   }} className="gap-2 cursor-pointer">
-                      <FileText className="w-4 h-4 text-slate-500"/> Markdown (.md)
-                   </DropdownMenuItem>
-                   <DropdownMenuItem onClick={() => {
-                      // PDF Export via Print
-                      const style = document.createElement('style');
-                      style.innerHTML = `
+
+                      const blob = new Blob([md], { type: "text/markdown" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `${title || "document"}.md`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    } catch (e) {
+                      console.error("Markdown export failed:", e);
+                      alert("Export failed: " + e);
+                    }
+                  }} className="gap-2 cursor-pointer">
+                    <FileText className="w-4 h-4 text-slate-500" /> Markdown (.md)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => {
+                    // PDF Export via Print
+                    const style = document.createElement('style');
+                    style.innerHTML = `
                         @media print {
                           @page { margin: 20mm; size: A4; }
                           body { background: white; -webkit-print-color-adjust: exact; }
@@ -866,12 +813,12 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
                           .page-break, .page-number { display: none; } 
                         }
                       `;
-                      document.head.appendChild(style);
-                      window.print();
-                      document.head.removeChild(style);
-                   }} className="gap-2 cursor-pointer">
-                      <FileDown className="w-4 h-4 text-slate-500"/> PDF (Print)
-                   </DropdownMenuItem>
+                    document.head.appendChild(style);
+                    window.print();
+                    document.head.removeChild(style);
+                  }} className="gap-2 cursor-pointer">
+                    <FileDown className="w-4 h-4 text-slate-500" /> PDF (Print)
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
 
@@ -886,13 +833,13 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
                 <DropdownMenuContent align="start" className="p-3 min-w-[200px] rounded-3xl bg-white border-slate-200 shadow-2xl z-[1000] animate-in fade-in zoom-in duration-200">
                   <div className="grid grid-cols-5 gap-2">
                     {["#000000", "#ef4444", "#f97316", "#f59e0b", "#10b981", "#3b82f6", "#6366f1", "#8b5cf6", "#d946ef", "#64748b"].map(color => (
-                        <button
-                          key={color}
-                          onClick={() => editor.chain().focus().setColor(color).run()}
-                          className="w-8 h-8 rounded-xl border border-slate-100 hover:scale-110 active:scale-95 transition-all shadow-sm"
-                          style={{ backgroundColor: color }}
-                        />
-                      ))}
+                      <button
+                        key={color}
+                        onClick={() => editor.chain().focus().setColor(color).run()}
+                        className="w-8 h-8 rounded-xl border border-slate-100 hover:scale-110 active:scale-95 transition-all shadow-sm"
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
                     <button onClick={() => editor.chain().focus().unsetColor().run()} className="w-8 h-8 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center hover:bg-slate-100 transition-all">
                       <Type className="w-4 h-4 text-slate-400" />
                     </button>

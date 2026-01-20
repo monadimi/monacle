@@ -326,6 +326,7 @@ function makeStitchedStream(
   });
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeThrottledStream(
   inputStream: ReadableStream<Uint8Array> | any,
   bytesPerSecond: number,
