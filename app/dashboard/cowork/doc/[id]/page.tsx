@@ -3,18 +3,7 @@ import { getDoc } from "@/app/actions/cowork";
 import { notFound, redirect } from "next/navigation";
 import { cookies } from "next/headers";
 
-function parseJsonCookie(value?: string): Record<string, unknown> | null {
-  if (!value) return null;
-  try {
-    return JSON.parse(decodeURIComponent(value));
-  } catch {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return null;
-    }
-  }
-}
+import { verifySession } from "@/lib/session";
 
 export default async function DocPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -29,7 +18,7 @@ export default async function DocPage({ params }: { params: Promise<{ id: string
 
   const cookieStore = await cookies();
   const session = cookieStore.get("monacle_session");
-  const user = parseJsonCookie(session?.value);
+  const user = await verifySession(session?.value);
 
   if (!user) {
     redirect("/");

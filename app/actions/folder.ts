@@ -9,6 +9,7 @@
 
 import { cookies } from "next/headers";
 import { getAdminClient } from "@/lib/admin";
+import { verifySession } from "@/lib/session";
 import { incrementVersion, getOrCreateTeamUser } from "./common";
 
 export async function createFolder(
@@ -19,8 +20,8 @@ export async function createFolder(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 
@@ -60,8 +61,8 @@ export async function deleteFolder(id: string) {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
     const record = await pb.collection("folders").getOne(id);
@@ -112,8 +113,8 @@ export async function updateFolder(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
     const record = await pb.collection("folders").getOne(id);
@@ -126,7 +127,6 @@ export async function updateFolder(
     if (data.parent) {
       try {
         const newParent = await pb.collection("folders").getOne(data.parent);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (data as any).owner = newParent.owner;
       } catch {
         // ignore

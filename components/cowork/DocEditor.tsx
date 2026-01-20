@@ -202,19 +202,16 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
   useEffect(() => {
     const user = currentUser as { token: string } | null;
     if (user?.token) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       pb.authStore.save(user.token, currentUser as any);
     }
   }, [currentUser]);
 
   useEffect(() => {
     if (!editor || readOnly) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleTransaction = ({ transaction }: { transaction: any }) => {
       if (!transaction.docChanged) return;
       if (isApplyingRemoteRef.current) return;
       if (!transaction.steps?.length) return;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       pendingStepsRef.current.push(...transaction.steps.map((step: any) => step.toJSON()));
     };
     editor.on("transaction", handleTransaction);
@@ -283,7 +280,6 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
           const { state, view } = editor;
           let tr = state.tr;
           let appliedSteps = 0;
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const reappliedSteps: any[] = [];
           for (const stepJson of stepsToReapply) {
             try {
@@ -332,7 +328,6 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
     return null;
   }, [editor]);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const isPageEmpty = useCallback((node: any) => {
     if (node.childCount !== 1) return false;
     const child = node.firstChild;
@@ -774,9 +769,7 @@ export default function DocEditor({ docId, initialData, readOnly = false, curren
                     try {
                       console.log("Exporting Markdown...");
                       console.log("Editor Storage:", editor.storage);
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
                       console.log("Markdown Extension:", (editor.storage as any).markdown);
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
                       const md = (editor.storage as any).markdown?.getMarkdown();
                       console.log("Generated Markdown:", md);
 

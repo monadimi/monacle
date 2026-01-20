@@ -158,7 +158,6 @@ export function useDriveData(user: {
           }
 
           if (hasUpdates && changes) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const deletedIds = changes.deleted.map((d: any) => d.targetId);
             if (deletedIds.length > 0) {
               await localDrive.deleteFiles(deletedIds);
@@ -226,7 +225,6 @@ export function useDriveData(user: {
         .getOne(file.id);
       await localDrive.saveFiles([freshRecord]);
       loadFromLocal();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (e: any) {
       if (e?.status === 404) {
         await localDrive.deleteFiles([file.id]);

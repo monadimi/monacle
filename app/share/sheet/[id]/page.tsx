@@ -4,6 +4,8 @@ import { notFound } from "next/navigation";
 import { cookies } from "next/headers";
 import PBAuthSync from "@/components/PBAuthSync";
 
+import { verifySession } from "@/lib/session";
+
 export default async function PublicSheetPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const result = await getSheet(id);
@@ -19,7 +21,7 @@ export default async function PublicSheetPage({ params }: { params: Promise<{ id
 
   const cookieStore = await cookies();
   const session = cookieStore.get("monacle_session");
-  const user = session?.value ? JSON.parse(session.value) : null;
+  const user = await verifySession(session?.value);
 
   const canEdit = false; // Sheets sharing is currently View-Only MVP
 

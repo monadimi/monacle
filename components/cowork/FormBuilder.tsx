@@ -223,7 +223,6 @@ export default function FormBuilder({ formId, initialData }: { formId: string, i
       await updateForm(formId, {
         title: form.title,
         description: form.description,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         questions: form.questions as any
       });
       setLastSavedForm(JSON.stringify(form));

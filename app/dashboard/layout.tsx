@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import GlobalRail from "@/components/GlobalRail";
 import PBAuthSync from "@/components/PBAuthSync";
+import { verifySession } from "@/lib/session";
 import { ReactNode } from "react";
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
@@ -12,10 +13,8 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     redirect("/");
   }
 
-  let user;
-  try {
-    user = JSON.parse(decodeURIComponent(session.value));
-  } catch {
+  const user = await verifySession(session.value);
+  if (!user) {
     redirect("/");
   }
 

@@ -3,6 +3,7 @@
 import PocketBase from "pocketbase";
 import { cookies } from "next/headers";
 import { getAdminClient, getTeamUserId } from "@/lib/admin";
+import { verifySession } from "@/lib/session";
 
 // Helper to get global version
 async function getCurrentVersion(pb: PocketBase): Promise<number> {
@@ -16,13 +17,13 @@ async function getCurrentVersion(pb: PocketBase): Promise<number> {
 
 export async function getDeltaUpdates(
   localVersion: number,
-  ownerFilter?: string
+  ownerFilter?: string,
 ) {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
     const serverVersion = await getCurrentVersion(pb);
@@ -86,18 +87,26 @@ export async function getDeltaUpdates(
 
     // But! We also need to sync files that are SHARED with me?
     // Current listFiles didn't explicitly handle "shared with me" separately well,
-    // it was just filtering by owner usually.
     // Let's stick to the requested scope: "files visible in current view context".
     // Actually, sync needs to be broader if we cache EVERYTHING.
     // Proposal: Sync ALL files owned by user + Team files.
     // Filter: (owner = user.id || owner = teamId) && tVersion > localVersion
 
-    // Resolve Team ID
+    // 1. Fetch Updated/Created Files using Admin Client
+    // We must use Admin Client because 'cloud' collection has restricted API rules (Admin Only).
+    // We strictly filter by ownership to simulate RLS-like security.
+
+    // Ensure teamId is resolved for the filter
     if (!teamId) teamId = (await getTeamUserId(pb)) || "";
 
     const syncFilter = `(owner = "${user.id}" || owner = "${teamId}") && tVersion > ${localVersion}`;
 
-    // Use Auto-Cancellation false to prevent aborts
+    console.log("[Sync] Request (Admin Client):", {
+      userId: user.id,
+      localVersion,
+      syncFilter,
+    });
+
     const filesPromise = pb.collection("cloud").getFullList({
       filter: syncFilter,
       $autoCancel: false,
@@ -108,8 +117,8 @@ export async function getDeltaUpdates(
       $autoCancel: false,
     });
 
-    // 2. Fetch Deleted Items
-    // Condition: tDeleted where tVersion > localVersion AND (owner = user.id || owner = teamId)
+    // 2. Fetch Deleted Items (Admin Client)
+    // Strict Admin Filter for Deletions
     const deletedPromise = pb.collection("tDeleted").getFullList({
       filter: syncFilter,
       $autoCancel: false,
@@ -120,6 +129,12 @@ export async function getDeltaUpdates(
       foldersPromise,
       deletedPromise,
     ]);
+
+    console.log("[Sync] Results:", {
+      filesCount: files.length,
+      foldersCount: folders.length,
+      deletedCount: deleted.length,
+    });
 
     return {
       success: true,
@@ -168,7 +183,7 @@ export async function getSchemaVersion() {
   }
 
   console.error(
-    "Schema Version Fetch definitively failed after retries. Using silent fallback."
+    "Schema Version Fetch definitively failed after retries. Using silent fallback.",
   );
   return {
     success: false,

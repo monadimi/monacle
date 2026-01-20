@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { getAdminClient } from "@/lib/admin";
+import { signSession } from "@/lib/session";
 
 function getExternalBaseUrl(req: NextRequest): string {
   const envBase = process.env.NEXT_PUBLIC_BASE_URL;
@@ -170,17 +171,15 @@ export async function GET(req: NextRequest) {
       token: accessToken,
     };
 
-    res.cookies.set(
-      "monacle_session",
-      encodeURIComponent(JSON.stringify(sessionData)),
-      {
-        httpOnly: true,
-        secure: isProd,
-        sameSite: "lax",
-        path: "/",
-        maxAge: 60 * 60 * 24 * 7,
-      },
-    );
+    const signedSession = await signSession(sessionData);
+
+    res.cookies.set("monacle_session", signedSession, {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 7,
+    });
 
     res.cookies.set("monacle_token", accessToken, {
       httpOnly: true,

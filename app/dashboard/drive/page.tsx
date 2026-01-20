@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import DriveInterface from "@/components/DriveInterface";
+import { verifySession } from "@/lib/session";
 
 export default async function DrivePage() {
   const cookieStore = await cookies();
@@ -11,9 +12,10 @@ export default async function DrivePage() {
   }
 
   let user;
-  try {
-    user = JSON.parse(decodeURIComponent(session.value));
-  } catch {
+  if (session?.value) {
+    user = await verifySession(session.value);
+    if (!user) redirect("/");
+  } else {
     redirect("/");
   }
 

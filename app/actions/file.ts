@@ -9,14 +9,15 @@
 
 import { cookies } from "next/headers";
 import { getAdminClient } from "@/lib/admin";
+import { verifySession } from "@/lib/session";
 import { incrementVersion, getOrCreateTeamUser } from "./common";
 
 export async function uploadFile(formData: FormData) {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
 
@@ -52,7 +53,6 @@ export async function uploadFile(formData: FormData) {
     return {
       success: false,
       error: (error as Error).message || "Upload failed",
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       details: (error as any).data,
     };
   }
@@ -73,60 +73,94 @@ export async function listFiles(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-
-    if (!session?.value) throw new Error("Unauthorized: No session found");
-    const user = JSON.parse(decodeURIComponent(session.value));
-    if (!user.id) throw new Error("Unauthorized: Invalid session");
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized: Invalid session");
 
     const pb = await getAdminClient();
 
-    let serverFilter = options.filter || "";
-    if (serverFilter.includes("TEAM_MONAD")) {
-      const teamId = await getOrCreateTeamUser(pb);
-      serverFilter = serverFilter.replace(/TEAM_MONAD/g, teamId);
+    // 1. Determine Ownership Scope
+    let targetOwnerId = user.id;
+    if (options.filter && options.filter.includes("TEAM_MONAD")) {
+      targetOwnerId = await getOrCreateTeamUser(pb);
     }
 
-    let fileFilter = serverFilter;
+    console.log("[listFiles] Inputs:", {
+      userId: user.id,
+      targetOwnerId,
+      options,
+      isTeamRequest: options.filter?.includes("TEAM_MONAD"),
+    });
+
+    // Begin constructing strict filter
+    let fileFilter = `owner = "${targetOwnerId}"`;
+
+    // 2. Apply Type Filter
     if (options.type && options.type !== "all") {
+      let typeCondition = "";
       if (options.type === "image")
-        fileFilter +=
-          (fileFilter ? " && " : "") +
-          `(file ~ '.jpg' || file ~ '.jpeg' || file ~ '.png' || file ~ '.gif' || file ~ '.webp' || file ~ '.svg')`;
+        typeCondition = `(file ~ '.jpg' || file ~ '.jpeg' || file ~ '.png' || file ~ '.gif' || file ~ '.webp' || file ~ '.svg')`;
       else if (options.type === "video")
-        fileFilter +=
-          (fileFilter ? " && " : "") +
-          `(file ~ '.mp4' || file ~ '.mov' || file ~ '.webm')`;
+        typeCondition = `(file ~ '.mp4' || file ~ '.mov' || file ~ '.webm')`;
       else if (options.type === "doc")
-        fileFilter +=
-          (fileFilter ? " && " : "") +
-          `(file ~ '.pdf' || file ~ '.doc' || file ~ '.txt' || file ~ '.md' || file ~ '.json')`;
+        typeCondition = `(file ~ '.pdf' || file ~ '.doc' || file ~ '.txt' || file ~ '.md' || file ~ '.json')`;
+
+      if (typeCondition) {
+        fileFilter += ` && ${typeCondition}`;
+      }
     }
 
-    if (options.search)
-      fileFilter +=
-        (fileFilter ? " && " : "") +
-        `(file ~ "${options.search}" || name ~ "${options.search}")`;
+    // 3. Apply Search Filter (Sanitized)
+    if (options.search) {
+      // Robust sanitization: Escape double quotes and backslashes
+      // This prevents breaking out of the double-quoted string literal in PB filter
+      const safeSearch = options.search.replace(/[\\"]/g, "\\$&");
+      fileFilter += ` && (file ~ "${safeSearch}" || name ~ "${safeSearch}")`;
+    }
 
-    if (options.folderId && options.folderId !== "root")
-      fileFilter +=
-        (fileFilter ? " && " : "") + `folder = "${options.folderId}"`;
-    else fileFilter += (fileFilter ? " && " : "") + `folder = ""`;
+    // Critical: options.filter is purposefully IGNORED to prevent injection.
+    // Only internal logic (team check) uses it safely at the start.
 
-    let folderFilter = serverFilter;
+    // 4. Apply Folder Filter
+    if (options.folderId && options.folderId !== "root") {
+      fileFilter += ` && folder = "${options.folderId}"`;
+    } else {
+      fileFilter += ` && folder = ""`;
+    }
+
+    // 5. Construct Folder List Filter
+    let folderFilter = `owner = "${targetOwnerId}"`;
     const shouldFetchFolders = !options.type || options.type === "all";
 
     if (shouldFetchFolders) {
-      if (options.search)
-        folderFilter +=
-          (folderFilter ? " && " : "") + `name ~ "${options.search}"`;
-      if (options.folderId && options.folderId !== "root")
-        folderFilter +=
-          (folderFilter ? " && " : "") + `parent = "${options.folderId}"`;
-      else folderFilter += (folderFilter ? " && " : "") + `parent = ""`;
+      if (options.search) {
+        const safeSearch = options.search.replace(/"/g, '\\"');
+        folderFilter += ` && name ~ "${safeSearch}"`;
+      }
+      if (options.folderId && options.folderId !== "root") {
+        folderFilter += ` && parent = "${options.folderId}"`;
+      } else {
+        folderFilter += ` && parent = ""`;
+      }
+    }
+
+    // 6. Validate Sort
+    const validSorts = [
+      "created",
+      "-created",
+      "updated",
+      "-updated",
+      "name",
+      "-name",
+      "size",
+      "-size",
+    ];
+    let safeSort = "-created";
+    if (options.sort && validSorts.includes(options.sort)) {
+      safeSort = options.sort;
     }
 
     const filesPromise = pb.collection("cloud").getList(page, perPage, {
-      sort: options.sort || "-created",
+      sort: safeSort,
       filter: fileFilter + " && file != ''",
       expand: "owner",
     });
@@ -159,20 +193,15 @@ export async function deleteFile(id: string) {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
     if (!user.id) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
     const record = await pb.collection("cloud").getOne(id);
     const teamId = await getOrCreateTeamUser(pb);
 
-    if (
-      record.owner !== user.id &&
-      record.owner !== user.email &&
-      record.owner !== teamId
-    ) {
+    if (record.owner !== user.id && record.owner !== teamId) {
       throw new Error("Forbidden: You do not own this file");
     }
 
@@ -203,16 +232,15 @@ export async function updateFileShare(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
     if (!user.id) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
     const record = await pb.collection("cloud").getOne(id);
     const teamId = await getOrCreateTeamUser(pb);
 
-    if (record.owner !== user.id && record.owner !== user.email) {
+    if (record.owner !== user.id) {
       if (record.owner !== teamId) throw new Error("Forbidden");
     }
 
@@ -234,30 +262,37 @@ export async function updateFile(
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
     if (!user.id) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
     const record = await pb.collection("cloud").getOne(id);
     const teamId = await getOrCreateTeamUser(pb);
 
-    if (
-      record.owner !== user.id &&
-      record.owner !== user.email &&
-      record.owner !== teamId
-    ) {
+    if (record.owner !== user.id && record.owner !== teamId) {
       throw new Error("Forbidden: You do not own this file");
     }
 
     if (data.folder) {
       try {
         const newParent = await pb.collection("folders").getOne(data.folder);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
+        // Security Check: User must own the destination folder
+        // or be in the team if it's a team folder (omitted for now as team logic works via owner)
+        if (newParent.owner !== user.id && newParent.owner !== teamId) {
+          throw new Error(
+            "Forbidden: You cannot move files to a folder you do not own.",
+          );
+        }
+
         (data as any).owner = newParent.owner;
-      } catch {
-        // ignore
+      } catch (e) {
+        // High Vulnerability Fix: Explicitly rethrow ALL errors.
+        // If we cannot validate the destination folder (404, network error, forbidden),
+        // we MUST NOT allow the file to be moved there.
+        // Proceeding would result in files in folders with mismatched ownership.
+        throw e;
       }
     }
 
@@ -276,9 +311,8 @@ export async function getStorageUsage(isTeam: boolean) {
   try {
     const cookieStore = await cookies();
     const session = cookieStore.get("monacle_session");
-
-    if (!session?.value) throw new Error("Unauthorized");
-    const user = JSON.parse(decodeURIComponent(session.value));
+    const user = await verifySession(session?.value);
+    if (!user) throw new Error("Unauthorized");
 
     const pb = await getAdminClient();
     let ownerId = user.id;

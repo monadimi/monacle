@@ -66,7 +66,6 @@ export function usePresence(
       const data = await res.json();
       const local = getLocalEditor();
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const next = (data.items || []).map((record: any) => ({
         userId: record.user_id,
         name: record.name || "User",

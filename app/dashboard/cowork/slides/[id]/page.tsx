@@ -4,29 +4,14 @@ import { getDeck } from "@/app/actions/cowork";
 import SlideEditor from "@/components/cowork/SlideEditor";
 import { redirect } from "next/navigation";
 
-function parseJsonCookie(value?: string): Record<string, unknown> | null {
-  if (!value) return null;
-  try {
-    return JSON.parse(decodeURIComponent(value));
-  } catch {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return null;
-    }
-  }
-}
+import { verifySession } from "@/lib/session";
 
 export default async function SlidePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const cookieStore = await cookies();
   const session = cookieStore.get("monacle_session");
 
-  if (!session?.value) {
-    redirect("/login");
-  }
-
-  const user = parseJsonCookie(session.value);
+  const user = await verifySession(session?.value);
   if (!user) {
     redirect("/login");
   }
