@@ -12,6 +12,12 @@ export default async function LoginPage() {
   const cookieStore = await cookies();
   const session = cookieStore.get("monacle_session");
 
+  console.log("[LoginPage] Server Session Check:", {
+    hasSession: !!session,
+    valueLength: session?.value?.length,
+    cookies: cookieStore.getAll().map(c => c.name)
+  });
+
   if (session?.value) {
     try {
       const parsed = JSON.parse(decodeURIComponent(session.value));
