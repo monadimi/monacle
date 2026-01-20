@@ -1,16 +1,23 @@
+/**
+ * @file components/cowork/Ideaboard.tsx
+ * @purpose Infinite canvas whiteboard for visual collaboration.
+ * @scope Vector Drawing, sticky notes, shapes, image uploads, real-time board sync.
+ * @out-of-scope Document text editing, complex relational data (Sheet).
+ * @failure-behavior Optimistic updates with rollback on conflict.
+ */
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
-import { 
-  Plus, 
-  Minus, 
-  Hand, 
-  MousePointer2, 
-  StickyNote, 
-  Circle, 
-  Square, 
-  Trash2, 
+import {
+  Plus,
+  Minus,
+  Hand,
+  MousePointer2,
+  StickyNote,
+  Circle,
+  Square,
+  Trash2,
   RefreshCcw,
   Link2,
   Eraser,
@@ -25,6 +32,7 @@ import pb from "@/lib/pocketbase";
 import { updateBoard, toggleSharing, uploadBoardImage } from "@/app/actions/cowork";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Copy, CheckSquare } from "lucide-react";
+import { usePresence } from "./hooks/usePresence";
 
 interface BoardElement {
   id: string;
@@ -85,7 +93,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
   const [elements, setElements] = useState<BoardElement[]>(initialData.elements || []);
   const [tVersion, setTVersion] = useState(initialData.tVersion || 0);
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "error">("saved");
-  
+
   // Viewport State
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -102,11 +110,11 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [currentStrokeColor, setCurrentStrokeColor] = useState(COLORS[3]); // Red/Dark for pen by default
 
-  const [activeEditors, setActiveEditors] = useState<{ userId: string; name: string; avatarUrl?: string; updated: string }[]>([]);
+  const { activeEditors } = usePresence(boardId, currentUser, 'board');
   const [linkingFromId, setLinkingFromId] = useState<string | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [isUploading, setIsUploading] = useState(false);
-  
+
   // Refs for logic
   const elementsRef = useRef(elements);
   const versionRef = useRef(tVersion);
@@ -132,53 +140,53 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
   // --- Real-time Sync & Save ---
 
   // Use a ref to store the recursive save function to avoid circular dependency in useCallback
-  const saveRef = useRef<(elements: BoardElement[]) => void>(() => {});
+  const saveRef = useRef<(elements: BoardElement[]) => void>(() => { });
 
   const performSave = useCallback(async (updatedElements: BoardElement[]) => {
-      const nextVersion = versionRef.current + 1;
-      const res = await updateBoard(boardId, { 
-        elements: updatedElements,
-        tVersion: nextVersion,
-        lastClientId: clientId
+    const nextVersion = versionRef.current + 1;
+    const res = await updateBoard(boardId, {
+      elements: updatedElements,
+      tVersion: nextVersion,
+      lastClientId: clientId
+    });
+
+    if (res.success) {
+      setSaveStatus("saved");
+      setTVersion(nextVersion);
+    } else if ((res as unknown as { conflict?: boolean, latestBoard?: BoardData }).conflict) {
+      setSaveStatus("error");
+      const latest = (res as unknown as { latestBoard: BoardData }).latestBoard;
+      // Merge strategy: Local wins but remote elements added if missing? 
+      const remoteElements = latest.elements || [];
+      const merged = [...updatedElements];
+
+      // Add remote elements that we don't have
+      remoteElements.forEach((re: BoardElement) => {
+        if (!merged.find(me => me.id === re.id)) {
+          merged.push(re);
+        }
       });
 
-      if (res.success) {
-        setSaveStatus("saved");
-        setTVersion(nextVersion);
-      } else if ((res as unknown as { conflict?: boolean, latestBoard?: BoardData }).conflict) {
-        setSaveStatus("error");
-        const latest = (res as unknown as { latestBoard: BoardData }).latestBoard;
-        // Merge strategy: Local wins but remote elements added if missing? 
-        const remoteElements = latest.elements || [];
-        const merged = [...updatedElements];
-        
-        // Add remote elements that we don't have
-        remoteElements.forEach((re: BoardElement) => {
-          if (!merged.find(me => me.id === re.id)) {
-            merged.push(re);
-          }
-        });
+      isApplyingRemoteRef.current = true;
+      setElements(merged);
+      setTVersion(latest.tVersion);
+      setTimeout(() => { isApplyingRemoteRef.current = false; }, 0);
 
-        isApplyingRemoteRef.current = true;
-        setElements(merged);
-        setTVersion(latest.tVersion);
-        setTimeout(() => { isApplyingRemoteRef.current = false; }, 0);
-        
-        // Retry save with merged using the ref
-        saveRef.current(merged); 
-      } else {
-        setSaveStatus("error");
-      }
+      // Retry save with merged using the ref
+      saveRef.current(merged);
+    } else {
+      setSaveStatus("error");
+    }
   }, [boardId, clientId]);
 
   const debouncedSave = useCallback((updatedElements: BoardElement[]) => {
     setSaveStatus("saving");
-    
+
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 
     saveTimerRef.current = setTimeout(() => {
-        performSave(updatedElements);
-        saveTimerRef.current = null;
+      performSave(updatedElements);
+      saveTimerRef.current = null;
     }, 2000);
   }, [performSave]);
 
@@ -208,74 +216,12 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
     return () => { pb.collection("boards").unsubscribe(boardId); };
   }, [boardId, clientId]);
 
-  // --- Presence Logic ---
-
-  const buildAvatarUrl = useCallback((user?: { id?: string; avatar?: string }) => {
-    if (!user?.avatar || !user?.id) return undefined;
-    return `https://monadb.snowman0919.site/api/files/users/${user.id}/${user.avatar}`;
-  }, []);
-
-  const fetchPresence = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/presence/board?boardId=${boardId}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      const items = data.items || [];
-      
-      interface PresenceItem { user_id: string; name: string; avatar: string; updated: string; }
-
-      const uniqueItems = items.reduce((acc: PresenceItem[], curr: PresenceItem) => {
-        if (!acc.find((i) => i.user_id === curr.user_id)) acc.push(curr);
-        return acc;
-      }, []);
-
-      const next = uniqueItems.map((record: PresenceItem) => ({
-        userId: record.user_id,
-        name: record.name,
-        avatarUrl: buildAvatarUrl({ id: record.user_id, avatar: record.avatar }),
-        updated: record.updated
-      }));
-      setActiveEditors(next);
-    } catch {}
-  }, [boardId, buildAvatarUrl]);
-
-  const upsertPresence = useCallback(async () => {
-    try {
-      await fetch("/api/presence/board", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ boardId })
-      });
-    } catch {}
-  }, [boardId]);
-  
-  // Stable refs for interval to avoid dependency cycle
-  const fetchPresenceRef = useRef(fetchPresence);
-  const upsertPresenceRef = useRef(upsertPresence);
-  useEffect(() => { fetchPresenceRef.current = fetchPresence; }, [fetchPresence]);
-  useEffect(() => { upsertPresenceRef.current = upsertPresence; }, [upsertPresence]);
-
-  useEffect(() => {
-    if (readOnly) return;
-    
-    // Initial call
-    fetchPresenceRef.current();
-    upsertPresenceRef.current();
-
-    const heartbeat = setInterval(() => upsertPresenceRef.current(), 12000);
-    const refresh = setInterval(() => fetchPresenceRef.current(), 6000);
-    
-    return () => {
-      clearInterval(heartbeat);
-      clearInterval(refresh);
-      fetch(`/api/presence/board?boardId=${boardId}`, { method: "DELETE", keepalive: true }).catch(() => {});
-    };
-  }, [boardId, readOnly]);
+  // --- Presence Logic is handled by usePresence hook ---
 
   useEffect(() => {
     const handlePaste = async (e: ClipboardEvent) => {
       if (readOnly) return;
-      
+
       const items = e.clipboardData?.items;
       if (!items) return;
 
@@ -330,7 +276,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
       setIsDrawing(true);
       const canvasX = (e.clientX - offset.x) / scale;
       const canvasY = (e.clientY - offset.y) / scale;
-      
+
       const newPath: BoardElement = {
         id: crypto.randomUUID(),
         type: 'path',
@@ -348,7 +294,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
     if (!readOnly && (tool === 'circle' || tool === 'square' || tool === 'sticky')) {
       const x = (e.clientX - offset.x) / scale - 100;
       const y = (e.clientY - offset.y) / scale - 100;
-      
+
       if (tool === 'sticky') {
         addSticky(x, y);
       } else {
@@ -389,14 +335,14 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
     if (isDraggingCanvas) {
       setIsDraggingCanvas(false);
     }
-    
+
     if (isDrawing) {
       setIsDrawing(false);
       // Convert points to pathData for persistence
       setElements(prev => {
         const last = prev[prev.length - 1];
         if (!last || last.type !== 'path' || !last.points) return prev;
-        
+
         const pathData = `M ${last.points.map(p => `${p.x} ${p.y}`).join(' L ')}`;
         const finalElement = { ...last, pathData, points: undefined };
         const nextElements = [...prev.slice(0, -1), finalElement];
@@ -484,7 +430,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
     const nextShared = !isShared || forceType !== undefined || forceTeam !== undefined;
     const nextType = forceType || shareType;
     const nextTeam = forceTeam !== undefined ? forceTeam : shareTeam;
-    
+
     const res = await toggleSharing("boards", boardId, nextShared, nextType, nextTeam);
     if (res.success) {
       setIsShared(nextShared);
@@ -510,7 +456,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
             <ChevronLeft className="w-5 h-5" />
           </button>
           <div className="flex flex-col">
-            <input 
+            <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               onBlur={() => updateBoard(boardId, { title })}
@@ -518,19 +464,19 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
               className="bg-transparent border-none text-lg font-bold text-slate-800 focus:ring-0 p-0 w-64"
             />
             <div className="flex items-center gap-2 text-[10px] text-slate-400 font-medium uppercase tracking-wider">
-               <span>v{tVersion}</span>
-               <span className="w-1 h-1 rounded-full bg-slate-300" />
-               <span className={cn(
-                 saveStatus === "saving" ? "text-indigo-500" : saveStatus === "error" ? "text-red-500" : "text-green-500"
-               )}>
-                 {saveStatus === "saving" ? "Saving..." : saveStatus === "error" ? "Error" : "Saved"}
-               </span>
-               {isUploading && (
-                 <>
-                   <span className="w-1 h-1 rounded-full bg-slate-300" />
-                   <span className="text-indigo-500 animate-pulse">Uploading Image...</span>
-                 </>
-               )}
+              <span>v{tVersion}</span>
+              <span className="w-1 h-1 rounded-full bg-slate-300" />
+              <span className={cn(
+                saveStatus === "saving" ? "text-indigo-500" : saveStatus === "error" ? "text-red-500" : "text-green-500"
+              )}>
+                {saveStatus === "saving" ? "Saving..." : saveStatus === "error" ? "Error" : "Saved"}
+              </span>
+              {isUploading && (
+                <>
+                  <span className="w-1 h-1 rounded-full bg-slate-300" />
+                  <span className="text-indigo-500 animate-pulse">Uploading Image...</span>
+                </>
+              )}
 
             </div>
           </div>
@@ -540,8 +486,8 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
           {/* Active Editors */}
           <div className="flex items-center -space-x-2">
             {activeEditors.map((editor) => (
-              <div 
-                key={editor.userId} 
+              <div
+                key={editor.userId}
                 className="w-8 h-8 rounded-full border-2 border-white bg-slate-200 overflow-hidden shadow-sm"
                 title={editor.name}
               >
@@ -557,53 +503,53 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
           </div>
 
           <div className="flex items-center gap-2 border-l border-slate-200 pl-6 text-slate-500">
-             <button 
-               onClick={() => setIsShareOpen(true)}
-               className={cn(
-                 "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-all",
-                 isShared ? "bg-indigo-100 text-indigo-600 hover:bg-indigo-200" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-               )}
-             >
-               <Share2 className="w-3.5 h-3.5" />
-               {isShared ? "공유 중" : "공유"}
-             </button>
+            <button
+              onClick={() => setIsShareOpen(true)}
+              className={cn(
+                "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-all",
+                isShared ? "bg-indigo-100 text-indigo-600 hover:bg-indigo-200" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              )}
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              {isShared ? "공유 중" : "공유"}
+            </button>
           </div>
         </div>
       </div>
 
       {/* Toolbox */}
       <div className="absolute left-6 top-1/2 -translate-y-1/2 z-50 flex flex-col gap-2 p-2 bg-white rounded-2xl shadow-xl border border-slate-200">
-        <button 
-          onClick={() => setTool('select')} 
+        <button
+          onClick={() => setTool('select')}
           className={cn("p-3 rounded-xl transition-all", tool === 'select' ? "bg-slate-900 text-white shadow-lg" : "hover:bg-slate-50 text-slate-400")}
         >
           <MousePointer2 className="w-5 h-5" />
         </button>
-        <button 
-          onClick={() => setTool('hand')} 
+        <button
+          onClick={() => setTool('hand')}
           className={cn("p-3 rounded-xl transition-all", tool === 'hand' ? "bg-slate-900 text-white shadow-lg" : "hover:bg-slate-50 text-slate-400")}
         >
           <Hand className="w-5 h-5" />
         </button>
         <div className="w-full h-px bg-slate-100 my-1" />
-        <button 
-           onClick={() => addSticky()}  
+        <button
+          onClick={() => addSticky()}
           disabled={readOnly}
           className={cn("p-3 rounded-xl transition-all", tool === 'sticky' ? "bg-indigo-600 text-white shadow-lg" : "hover:bg-indigo-50 text-indigo-500")}
           title="Add Sticky Note"
         >
           <StickyNote className="w-6 h-6" />
         </button>
-        <button 
-          onClick={() => setTool('pen')} 
+        <button
+          onClick={() => setTool('pen')}
           disabled={readOnly}
           className={cn("p-3 rounded-xl transition-all", tool === 'pen' ? "bg-indigo-600 text-white shadow-lg" : "hover:bg-slate-50 text-slate-400")}
           title="Pen Tool"
         >
           <Pencil className="w-5 h-5" />
         </button>
-        <button 
-          onClick={() => setTool('eraser')} 
+        <button
+          onClick={() => setTool('eraser')}
           disabled={readOnly}
           className={cn("p-3 rounded-xl transition-all", tool === 'eraser' ? "bg-red-600 text-white shadow-lg" : "hover:bg-red-50 text-red-400")}
           title="Eraser Tool"
@@ -611,7 +557,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
           <Eraser className="w-5 h-5" />
         </button>
         <div className="w-full h-px bg-slate-100 my-1" />
-        <button 
+        <button
           onClick={() => {
             if (confirm("모든 드로잉과 연결을 지우시겠습니까?")) {
               const nextElements = elements.filter(el => el.type !== 'path' && el.type !== 'connection');
@@ -625,24 +571,24 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
         >
           <RefreshCcw className="w-5 h-5" />
         </button>
-        <button 
-          onClick={() => setTool('square')} 
+        <button
+          onClick={() => setTool('square')}
           disabled={readOnly}
           className={cn("p-3 rounded-xl transition-all", tool === 'square' ? "bg-indigo-600 text-white shadow-lg" : "hover:bg-slate-50 text-slate-400")}
           title="Square Tool"
         >
           <Square className="w-5 h-5" />
         </button>
-        <button 
-          onClick={() => setTool('circle')} 
+        <button
+          onClick={() => setTool('circle')}
           disabled={readOnly}
           className={cn("p-3 rounded-xl transition-all", tool === 'circle' ? "bg-indigo-600 text-white shadow-lg" : "hover:bg-slate-50 text-slate-400")}
           title="Circle Tool"
         >
           <Circle className="w-5 h-5" />
         </button>
-        <button 
-          onClick={() => setTool('link')} 
+        <button
+          onClick={() => setTool('link')}
           disabled={readOnly}
           className={cn("p-3 rounded-xl transition-all", tool === 'link' ? "bg-indigo-600 text-white shadow-lg" : "hover:bg-slate-50 text-slate-400")}
           title="Connect Elements"
@@ -672,15 +618,15 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
 
       {/* Zoom Controls */}
       <div className="absolute right-6 bottom-6 z-50 flex items-center gap-2 p-1.5 bg-white rounded-xl shadow-lg border border-slate-200">
-         <button onClick={() => setScale(s => Math.max(s - 0.1, 0.1))} className="p-1.5 hover:bg-slate-50 rounded text-slate-400"><Minus className="w-4 h-4" /></button>
-         <div className="text-[11px] font-bold text-slate-600 min-w-[40px] text-center">{Math.round(scale * 100)}%</div>
-         <button onClick={() => setScale(s => Math.min(s + 0.1, 3))} className="p-1.5 hover:bg-slate-50 rounded text-slate-400"><Plus className="w-4 h-4" /></button>
-         <div className="w-px h-4 bg-slate-200 mx-1" />
-         <button onClick={() => { setScale(1); setOffset({ x: 0, y: 0 }); }} className="p-1.5 hover:bg-slate-50 rounded text-slate-400"><RefreshCcw className="w-4 h-4" /></button>
+        <button onClick={() => setScale(s => Math.max(s - 0.1, 0.1))} className="p-1.5 hover:bg-slate-50 rounded text-slate-400"><Minus className="w-4 h-4" /></button>
+        <div className="text-[11px] font-bold text-slate-600 min-w-[40px] text-center">{Math.round(scale * 100)}%</div>
+        <button onClick={() => setScale(s => Math.min(s + 0.1, 3))} className="p-1.5 hover:bg-slate-50 rounded text-slate-400"><Plus className="w-4 h-4" /></button>
+        <div className="w-px h-4 bg-slate-200 mx-1" />
+        <button onClick={() => { setScale(1); setOffset({ x: 0, y: 0 }); }} className="p-1.5 hover:bg-slate-50 rounded text-slate-400"><RefreshCcw className="w-4 h-4" /></button>
       </div>
 
       {/* Canvas */}
-      <div 
+      <div
         className={cn(
           "w-full h-full cursor-default overflow-hidden relative",
           tool === 'hand' && "cursor-grab",
@@ -693,7 +639,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
         onWheel={handleWheel}
       >
         {/* Grid Background */}
-        <div 
+        <div
           className="absolute inset-0 pointer-events-none opacity-[0.03]"
           style={{
             backgroundImage: `radial-gradient(#000 1px, transparent 0)`,
@@ -703,8 +649,8 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
         />
 
         {/* Board Layer */}
-        <div 
-          style={{ 
+        <div
+          style={{
             transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
             transformOrigin: '0 0',
             minWidth: '5000px',
@@ -723,10 +669,10 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
                     "absolute overflow-visible",
                     tool === 'eraser' ? "cursor-crosshair pointer-events-auto" : "pointer-events-none"
                   )}
-                  style={{ 
-                    left: 0, 
-                    top: 0, 
-                    zIndex: el.zIndex || 0 
+                  style={{
+                    left: 0,
+                    top: 0,
+                    zIndex: el.zIndex || 0
                   }}
                   onMouseDown={(e) => {
                     if (tool === 'eraser') {
@@ -756,7 +702,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
                 const y1 = (startElem.y || 0) + (startElem.h || 200) / 2;
                 const x2 = (endElem.x || 0) + (endElem.w || 200) / 2;
                 const y2 = (endElem.y || 0) + (endElem.h || 200) / 2;
-                
+
                 return (
                   <svg
                     key={el.id}
@@ -764,9 +710,9 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
                       "absolute overflow-visible",
                       tool === 'eraser' ? "cursor-crosshair pointer-events-auto" : "pointer-events-none"
                     )}
-                    style={{ 
-                      left: 0, 
-                      top: 0, 
+                    style={{
+                      left: 0,
+                      top: 0,
                       zIndex: 1 // Above paths, below stickies
                     }}
                     onMouseDown={(e) => {
@@ -786,9 +732,9 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
                     <circle cx={x1} cy={y1} r="4" fill="#475569" />
                     <circle cx={x2} cy={y2} r="4" fill="#475569" />
                     <foreignObject x={(x1 + x2) / 2 - 10} y={(y1 + y2) / 2 - 10} width="20" height="20" style={{ pointerEvents: 'auto' }}>
-                      <button 
-                         onClick={() => deleteElement(el.id)}
-                         className="w-5 h-5 bg-white rounded-full shadow-md flex items-center justify-center text-red-500 hover:bg-red-50 transition-colors"
+                      <button
+                        onClick={() => deleteElement(el.id)}
+                        className="w-5 h-5 bg-white rounded-full shadow-md flex items-center justify-center text-red-500 hover:bg-red-50 transition-colors"
                       >
                         <Trash2 className="w-3 h-3" />
                       </button>
@@ -848,7 +794,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
                     if (tool !== 'select') return;
                     e.stopPropagation();
                     bringToFront(el.id);
-                    
+
                     const startX = e.clientX;
                     const startY = e.clientY;
                     const origX = el.x || 0;
@@ -875,46 +821,46 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
                   }}
                 >
                   <img src={el.imageUrl} alt="Board Element" className="w-full h-full object-contain pointer-events-none" />
-                  
+
                   {!readOnly && (
                     <>
                       <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                         <button 
-                            onClick={(e) => { e.stopPropagation(); deleteElement(el.id); }}
-                            className="p-1.5 bg-white/90 backdrop-blur rounded-full shadow-md text-red-500 hover:bg-red-50 transition-colors"
-                         >
-                            <Trash2 className="w-4 h-4" />
-                         </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); deleteElement(el.id); }}
+                          className="p-1.5 bg-white/90 backdrop-blur rounded-full shadow-md text-red-500 hover:bg-red-50 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
-                      <div 
-                         className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize bg-indigo-500/30 opacity-0 group-hover:opacity-100 transition-opacity"
-                         onMouseDown={(e) => {
-                            e.stopPropagation();
-                            const startX = e.clientX;
-                            const startW = el.w;
-                            const startH = el.h;
-                            
-                            let currentW = startW;
-                            let currentH = startH;
+                      <div
+                        className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize bg-indigo-500/30 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onMouseDown={(e) => {
+                          e.stopPropagation();
+                          const startX = e.clientX;
+                          const startW = el.w;
+                          const startH = el.h;
 
-                            const onResize = (moveE: MouseEvent) => {
-                              const dw = (moveE.clientX - startX) / scale;
-                              const nextW = Math.max(50, startW + dw);
-                              const nextH = startH * (nextW / startW);
-                              currentW = nextW;
-                              currentH = nextH;
-                              setElements(prev => prev.map(p => p.id === el.id ? { ...p, w: nextW, h: nextH } : p));
-                            };
-                            
-                            const onResizeUp = () => {
-                              document.removeEventListener('mousemove', onResize);
-                              document.removeEventListener('mouseup', onResizeUp);
-                              updateElement(el.id, { w: currentW, h: currentH });
-                            };
-                            
-                            document.addEventListener('mousemove', onResize);
-                            document.addEventListener('mouseup', onResizeUp);
-                         }}
+                          let currentW = startW;
+                          let currentH = startH;
+
+                          const onResize = (moveE: MouseEvent) => {
+                            const dw = (moveE.clientX - startX) / scale;
+                            const nextW = Math.max(50, startW + dw);
+                            const nextH = startH * (nextW / startW);
+                            currentW = nextW;
+                            currentH = nextH;
+                            setElements(prev => prev.map(p => p.id === el.id ? { ...p, w: nextW, h: nextH } : p));
+                          };
+
+                          const onResizeUp = () => {
+                            document.removeEventListener('mousemove', onResize);
+                            document.removeEventListener('mouseup', onResizeUp);
+                            updateElement(el.id, { w: currentW, h: currentH });
+                          };
+
+                          document.addEventListener('mousemove', onResize);
+                          document.addEventListener('mouseup', onResizeUp);
+                        }}
                       />
                     </>
                   )}
@@ -943,7 +889,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
                 )}
                 onMouseDown={(e) => {
                   if (readOnly) return;
-                  
+
                   if (tool === 'link') {
                     e.stopPropagation();
                     if (!linkingFromId) {
@@ -975,7 +921,7 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
                   if (tool !== 'select') return;
                   e.stopPropagation();
                   bringToFront(el.id);
-                  
+
                   const startX = e.clientX;
                   const startY = e.clientY;
                   const origX = el.x || 0;
@@ -1004,47 +950,47 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
                   document.addEventListener('mouseup', onMouseUp, { passive: false });
                 }}
               >
-                 <textarea
-                   value={el.content || ""}
-                   onChange={(e) => updateElement(el.id, { content: e.target.value })}
-                   placeholder={el.type === 'sticky' ? "아이디어를 입력하세요..." : ""}
-                   readOnly={readOnly}
-                   className={cn(
-                     "flex-1 bg-transparent border-none resize-none p-0 focus:ring-0 text-slate-700 placeholder:text-slate-400 overflow-hidden w-full h-full",
-                     el.type === 'shape' ? "text-center font-bold text-lg flex items-center justify-center pt-10" : "text-sm"
-                   )}
-                   style={el.type === 'shape' ? { display: 'flex', alignItems: 'center' } : {}}
-                 />
-                 
-                 {!readOnly && (
-                   <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-between mt-2 pt-2 border-t border-black/5 bg-white/50 backdrop-blur-sm rounded-b-lg">
-                      <div className="flex gap-1 flex-wrap max-w-[120px]">
-                        {COLORS.map(c => (
-                          <button 
-                            key={c} 
-                            onClick={() => updateElement(el.id, { color: c })}
-                            className={cn("w-3.5 h-3.5 rounded-full border border-black/10", el.color === c && "ring-2 ring-slate-400 ring-offset-1")}
-                            style={{ backgroundColor: c }}
-                          />
-                        ))}
-                      </div>
-                  <div className="flex gap-1">
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); bringToFront(el.id); }} 
-                      className="p-1 hover:bg-black/5 rounded text-indigo-500 transition-colors"
-                      title="Bring to Front"
-                    >
-                       <Maximize2 className="w-3.5 h-3.5" />
-                    </button>
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); deleteElement(el.id); }} 
-                      className="p-1 hover:bg-black/5 rounded text-red-500 transition-colors"
-                    >
-                       <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                <textarea
+                  value={el.content || ""}
+                  onChange={(e) => updateElement(el.id, { content: e.target.value })}
+                  placeholder={el.type === 'sticky' ? "아이디어를 입력하세요..." : ""}
+                  readOnly={readOnly}
+                  className={cn(
+                    "flex-1 bg-transparent border-none resize-none p-0 focus:ring-0 text-slate-700 placeholder:text-slate-400 overflow-hidden w-full h-full",
+                    el.type === 'shape' ? "text-center font-bold text-lg flex items-center justify-center pt-10" : "text-sm"
+                  )}
+                  style={el.type === 'shape' ? { display: 'flex', alignItems: 'center' } : {}}
+                />
+
+                {!readOnly && (
+                  <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-between mt-2 pt-2 border-t border-black/5 bg-white/50 backdrop-blur-sm rounded-b-lg">
+                    <div className="flex gap-1 flex-wrap max-w-[120px]">
+                      {COLORS.map(c => (
+                        <button
+                          key={c}
+                          onClick={() => updateElement(el.id, { color: c })}
+                          className={cn("w-3.5 h-3.5 rounded-full border border-black/10", el.color === c && "ring-2 ring-slate-400 ring-offset-1")}
+                          style={{ backgroundColor: c }}
+                        />
+                      ))}
+                    </div>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); bringToFront(el.id); }}
+                        className="p-1 hover:bg-black/5 rounded text-indigo-500 transition-colors"
+                        title="Bring to Front"
+                      >
+                        <Maximize2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteElement(el.id); }}
+                        className="p-1 hover:bg-black/5 rounded text-red-500 transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
-                   </div>
-                 )}
+                )}
               </div>
             );
           })}
@@ -1072,10 +1018,10 @@ export default function Ideaboard({ initialData, currentUser, readOnly = false }
               })()}
             </svg>
           )}
+        </div>
       </div>
-    </div>
 
-    {/* Share Dialog */}
+      {/* Share Dialog */}
       <Dialog open={isShareOpen} onOpenChange={setIsShareOpen}>
         <DialogContent className="bg-[#F8FAFC]/95 backdrop-blur-xl border-none shadow-2xl rounded-[32px] w-[calc(100%-2rem)] sm:max-w-[480px] p-0 overflow-hidden">
           <DialogHeader className="px-8 pt-8 pb-4">

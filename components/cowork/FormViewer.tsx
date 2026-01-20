@@ -1,123 +1,32 @@
+/**
+ * @file components/cowork/FormViewer.tsx
+ * @purpose Main View Component for displaying and interacting with a form.
+ * @scope Rendering form steps, handling keyboard input events, coordinating animations.
+ * @out-of-scope State management (handled by useFormSession), Background effects (AuroraBackground), Text effects (HighlightText).
+ */
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { Copy, ArrowRight, ArrowLeft, Check, Command, Info } from "lucide-react";
+import { useEffect, useRef } from "react";
+import { ArrowRight, ArrowLeft, Check, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getForm, submitResponse } from "@/app/actions/cowork";
 import { motion, AnimatePresence } from "framer-motion";
 
-// --- Types ---
-type QuestionType = "short" | "paragraph" | "multiple" | "checkbox" | "dropdown" | "slider" | "text";
-
-interface Question {
-  id: string;
-  type: QuestionType;
-  title: string;
-  required: boolean;
-  options?: string[];
-  min?: number;
-  max?: number;
-  step?: number;
-}
-
-interface Form {
-  id: string;
-  title: string;
-  description: string;
-  questions: Question[];
-  isActive?: boolean;
-}
-
-// --- Components ---
-
-// 1. Shimmer Highlight Component (Clean Implementation)
-const HighlightText = ({ text }: { text: string }) => {
-  const parts = text.split(/(\*\*.*?\*\*)/);
-
-  return (
-    <span>
-      {parts.map((part, i) => {
-        if (part.startsWith('**') && part.endsWith('**')) {
-          const content = part.slice(2, -2);
-          return (
-            <motion.span
-              key={i}
-              className="relative inline-block font-bold text-slate-900"
-              initial={{ backgroundPosition: "200% center" }}
-              animate={{ backgroundPosition: "-200% center" }}
-              transition={{
-                repeat: Infinity,
-                duration: 3,
-                ease: "linear"
-              }}
-              style={{
-                backgroundImage: "linear-gradient(90deg, #1e293b 0%, #94a3b8 50%, #1e293b 100%)",
-                backgroundSize: "200% auto",
-                WebkitBackgroundClip: "text",
-                WebkitTextFillColor: "transparent",
-                backgroundClip: "text",
-                color: "transparent"
-              }}
-            >
-              {content}
-            </motion.span>
-          );
-        }
-        return part;
-      })}
-    </span>
-  );
-};
-
-// 2. Aurora Background (Optimized CSS vs heavy motion)
-const AuroraBackground = () => {
-  return (
-    <div className="fixed inset-0 z-0 overflow-hidden bg-[#fafafc] pointer-events-none">
-      {/* Optimized Blobs using standard CSS classes for simpler renders */}
-      <div
-        className="absolute top-[-10%] left-[-10%] w-[60vw] h-[60vw] bg-yellow-100/60 rounded-full blur-[80px] animate-[pulse_10s_ease-in-out_infinite] opacity-60"
-        style={{ willChange: 'transform, opacity' }}
-      />
-      <div
-        className="absolute bottom-[-10%] right-[-10%] w-[50vw] h-[50vw] bg-slate-200/40 rounded-full blur-[80px] animate-[pulse_12s_ease-in-out_infinite_reverse] opacity-60"
-        style={{ willChange: 'transform, opacity' }}
-      />
-      <div
-        className="absolute top-[40%] left-[30%] w-[40vw] h-[40vw] bg-orange-50/50 rounded-full blur-[60px] animate-[pulse_15s_ease-in-out_infinite] opacity-40"
-        style={{ willChange: 'transform, opacity' }}
-      />
-      <div className="absolute inset-0 bg-white/20 backdrop-blur-[1px]" />
-    </div>
-  );
-};
+// Extracted Dependencies
+import { AuroraBackground } from "@/components/ui/special/AuroraBackground";
+import { HighlightText } from "@/components/ui/special/HighlightText";
+import { useFormSession, Form } from "./hooks/useFormSession";
 
 export default function FormViewer({ formId, initialData }: { formId: string, initialData?: Form }) {
-  // State
-  const [form, setForm] = useState<Form | null>(initialData || null);
-  const [error, setError] = useState<string | null>(null);
+  // Use Custom Hook for Logic
+  const session = useFormSession(formId, initialData);
+  const {
+    form, error, loading,
+    currentStep, direction,
+    answers, errorState,
+    handleAnswer, handleNext, handlePrev
+  } = session;
 
-  // Navigation State
-  const [currentStep, setCurrentStep] = useState(0);
-  const [direction, setDirection] = useState(0);
-
-  // Data State
-  const [answers, setAnswers] = useState<Record<string, unknown>>({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errorState, setErrorState] = useState(false); // New state for validation feedback
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
-
-  // Fetch Form Data if not provided
-  useEffect(() => {
-    if (!initialData) {
-      getForm(formId).then(res => {
-        if (res.success && res.form) {
-          setForm(res.form as any);
-        } else {
-          setError(res.error || "Form not found");
-        }
-      });
-    }
-  }, [formId, initialData]);
 
   // Focus input on step change
   useEffect(() => {
@@ -129,74 +38,6 @@ export default function FormViewer({ formId, initialData }: { formId: string, in
     }, 100);
     return () => clearTimeout(timer);
   }, [currentStep]);
-
-  // Handlers
-  const handleAnswer = (val: any) => {
-    if (!form) return;
-    const currentQ = form.questions[currentStep - 1];
-    setAnswers(prev => ({ ...prev, [currentQ.id]: val }));
-  };
-
-  const handleNext = (overrideValue?: any) => {
-    if (!form) return;
-
-    // Validation
-    if (currentStep > 0 && currentStep <= form.questions.length) {
-      const q = form.questions[currentStep - 1];
-
-      // Skip validation for Text only type
-      if (q.type === 'text') {
-        // Just proceed
-      } else {
-        // Use override value if provided (for instant click-through), otherwise use state
-        const val = overrideValue !== undefined ? overrideValue : answers[q.id];
-        const isEmpty = val === undefined || val === "" || (Array.isArray(val) && val.length === 0);
-
-        if (q.required && isEmpty) {
-          setErrorState(true);
-          const qContainer = document.getElementById('question-container');
-          if (qContainer) {
-            qContainer.animate([
-              { transform: 'translateX(0)' },
-              { transform: 'translateX(-6px)' },
-              { transform: 'translateX(6px)' },
-              { transform: 'translateX(-6px)' },
-              { transform: 'translateX(6px)' },
-              { transform: 'translateX(0)' }
-            ], { duration: 300 });
-          }
-          // Auto-reset error state
-          setTimeout(() => setErrorState(false), 2000);
-          return;
-        }
-      }
-    }
-
-    if (currentStep < form.questions.length + 1) {
-      setDirection(1);
-      const nextStep = currentStep + 1;
-      setCurrentStep(nextStep);
-
-      // Check if next step is the last one (Outro) and trigger submit
-      if (nextStep === form.questions.length + 1) {
-        submit();
-      }
-    }
-  };
-
-  const handlePrev = () => {
-    if (currentStep > 0) {
-      setDirection(-1);
-      setCurrentStep(prev => prev - 1);
-    }
-  };
-
-  const submit = async () => {
-    if (!form) return;
-    setIsSubmitting(true);
-    await submitResponse(form.id, answers);
-    setIsSubmitting(false);
-  };
 
   // Keyboard Navigation
   useEffect(() => {
@@ -233,10 +74,10 @@ export default function FormViewer({ formId, initialData }: { formId: string, in
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [currentStep, answers, form]);
+  }, [currentStep, answers, form, handleNext, handlePrev]);
 
   if (error) return <div className="flex items-center justify-center min-h-screen text-slate-500 font-medium">{error}</div>;
-  if (!form) return <div className="flex items-center justify-center min-h-screen text-slate-400">Loading...</div>;
+  if (loading || !form) return <div className="flex items-center justify-center min-h-screen text-slate-400">Loading...</div>;
 
   const currentQ = currentStep > 0 && currentStep <= form.questions.length ? form.questions[currentStep - 1] : null;
 
@@ -268,7 +109,7 @@ export default function FormViewer({ formId, initialData }: { formId: string, in
     <div className="relative min-h-screen w-full font-sans text-slate-900 overflow-hidden selection:bg-slate-200 selection:text-slate-900">
       <AuroraBackground />
 
-      {/* Progress Bar - Grayscale */}
+      {/* Progress Bar */}
       <div className="fixed top-0 left-0 w-full h-1 bg-slate-100 z-50">
         <motion.div
           className="h-full bg-slate-900"
@@ -302,7 +143,7 @@ export default function FormViewer({ formId, initialData }: { formId: string, in
               <motion.button
                 whileHover={{ scale: 1.02, x: 5 }}
                 whileTap={{ scale: 0.98 }}
-                onClick={handleNext}
+                onClick={() => handleNext()}
                 className="mt-8 px-10 py-5 bg-slate-900 text-white rounded-2xl text-xl font-bold flex items-center gap-3 shadow-2xl hover:shadow-slate-400/20 transition-all border border-slate-900"
               >
                 시작하기 <ArrowRight className="w-6 h-6" />
@@ -482,7 +323,7 @@ export default function FormViewer({ formId, initialData }: { formId: string, in
 
               <div className="flex items-center gap-4 mt-8 pt-8 border-t border-slate-100 w-full">
                 <button
-                  onClick={handleNext}
+                  onClick={() => handleNext()}
                   className="px-8 py-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold flex items-center gap-2 transition-colors shadow-lg shadow-slate-200 hover:shadow-slate-300"
                 >
                   {currentStep === form.questions.length ? "제출하기" : "계속"}
@@ -548,7 +389,7 @@ export default function FormViewer({ formId, initialData }: { formId: string, in
           <ArrowLeft className="w-5 h-5" />
         </button>
         <button
-          onClick={handleNext}
+          onClick={() => handleNext()}
           disabled={currentStep > form.questions.length}
           className="p-3 bg-slate-900 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-slate-900 text-white rounded-full shadow-lg transition-colors"
         >

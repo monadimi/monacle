@@ -1,3 +1,10 @@
+/**
+ * @file app/page.tsx
+ * @purpose Public entry point and login interface for Monacle.
+ * @scope Login UI presentation, displaying auth errors from callback, triggering login action.
+ * @out-of-scope Authentication logic verification, dashboard rendering.
+ * @failure-behavior Displays error messages from URL query parameters (e.g. ?error=access_denied).
+ */
 "use client";
 
 import { useEffect, Suspense } from "react";
@@ -16,11 +23,11 @@ function LoginContent() {
     console.log("URL Search Params:", Object.fromEntries(searchParams.entries()));
     console.log("Document Domain:", document.domain);
     console.log("Referrer:", document.referrer);
-    
+
     // Detailed Cookie Check
     const cookies = document.cookie.split(';').map(c => c.trim()).filter(Boolean);
     console.log("Client-Accessible Cookies:", cookies.length > 0 ? cookies : "None found");
-    
+
     if (error) {
       console.error("Critical Auth Error:", error);
       // Detailed error mapping if known

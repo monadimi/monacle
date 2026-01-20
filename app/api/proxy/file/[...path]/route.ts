@@ -9,7 +9,7 @@ const POCKETBASE_API_URL =
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> }
+  { params }: { params: Promise<{ path: string[] }> },
 ) {
   try {
     const { path } = await params;
@@ -60,21 +60,21 @@ export async function GET(
       if (collectionId !== "cloud") {
         try {
           console.warn(
-            `[Proxy] Collection ${collectionId} not found, retrying with cloud`
+            `[Proxy] Collection ${collectionId} not found, retrying with cloud`,
           );
           collectionId = "cloud";
           record = await pb.collection(collectionId).getOne(recordId);
         } catch (fallbackErr) {
           console.error(
             `Proxy GetOne Failed for ${collectionId}/${recordId}:`,
-            fallbackErr
+            fallbackErr,
           );
           return new NextResponse("Not Found", { status: 404 });
         }
       } else {
         console.error(
           `Proxy GetOne Failed for ${collectionId}/${recordId}:`,
-          err
+          err,
         );
         return new NextResponse("Not Found", { status: 404 });
       }
@@ -106,7 +106,7 @@ export async function GET(
         return new NextResponse("Unauthorized", { status: 401 });
       }
       console.error(
-        `Forbidden access: User ${user.id} is not owner of ${recordId} (protected)`
+        `Forbidden access: User ${user.id} is not owner of ${recordId} (protected)`,
       );
       return new NextResponse("Forbidden", { status: 403 });
     }
@@ -155,7 +155,7 @@ export async function GET(
     const isSplitPart = (name: string) => /\.part\d+/.test(name);
     const hasSplitParts = files.length > 1 && files.every(isSplitPart);
 
-    let streamBody: any;
+    let streamBody: ReadableStream<Uint8Array> | null = null;
     const queryFilename = request.nextUrl.searchParams.get("filename");
     const thumb = request.nextUrl.searchParams.get("thumb");
 
@@ -177,7 +177,7 @@ export async function GET(
         const url = pb.files.getURL(
           record,
           f,
-          fileToken ? { token: fileToken } : undefined
+          fileToken ? { token: fileToken } : undefined,
         );
         console.log(`[Proxy] Generated Part URL: ${url}`);
         return url;
@@ -186,7 +186,7 @@ export async function GET(
       streamBody = makeStitchedStream(
         fileUrls,
         pb.authStore.isValid ? { Authorization: pb.authStore.token } : {},
-        files
+        files,
       );
       cleanName = cleanName.replace(/\.part\d+.*$/, "");
     } else {
@@ -196,12 +196,16 @@ export async function GET(
         ...(fileToken ? { token: fileToken } : {}),
       });
       const response = await fetch(fileUrl, {
-        headers: pb.authStore.isValid ? { Authorization: pb.authStore.token } : {},
+        headers: pb.authStore.isValid
+          ? { Authorization: pb.authStore.token }
+          : {},
       });
       console.log(`[Proxy] Fetching file from: ${fileUrl}`);
 
       if (!response.ok) {
-        console.error(`[Proxy] Upstream fetch failed: ${response.status} ${response.statusText}`);
+        console.error(
+          `[Proxy] Upstream fetch failed: ${response.status} ${response.statusText}`,
+        );
         return new NextResponse("File fetch failed", {
           status: response.status,
         });
@@ -277,7 +281,7 @@ export async function GET(
 function makeStitchedStream(
   urls: string[],
   headers: HeadersInit,
-  filesDebug: string[]
+  filesDebug: string[],
 ): ReadableStream<Uint8Array> {
   let currentIdx = 0;
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -322,13 +326,14 @@ function makeStitchedStream(
   });
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeThrottledStream(
-  inputStream: any,
-  bytesPerSecond: number
+  inputStream: ReadableStream<Uint8Array> | any,
+  bytesPerSecond: number,
 ): ReadableStream<Uint8Array> {
   if (typeof inputStream.getReader !== "function") return inputStream;
   const reader = inputStream.getReader();
-  let start = Date.now();
+  const start = Date.now();
   let bytesSent = 0;
   return new ReadableStream({
     async pull(controller) {
@@ -367,7 +372,7 @@ function parseJsonCookie(value?: string): Record<string, unknown> | null {
 
 function resolveUserToken(
   cookieStore: Awaited<ReturnType<typeof cookies>>,
-  session: Record<string, unknown> | null
+  session: Record<string, unknown> | null,
 ): string | null {
   const directToken = cookieStore.get("monacle_token")?.value;
   if (directToken) return directToken;

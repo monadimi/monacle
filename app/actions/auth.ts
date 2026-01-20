@@ -1,3 +1,10 @@
+/**
+ * @file app/actions/auth.ts
+ * @purpose Handles the initiation of the OAuth authentication flow.
+ * @scope Generating PKCE verifiers, setting interim cookies, and redirecting to Monad ID.
+ * @out-of-scope Token exchange, session creation, or user profile fetching.
+ * @failure-behavior Redirects or throws standard Next.js errors; mostly synchronous setup.
+ */
 "use server";
 
 import crypto from "crypto";
@@ -19,23 +26,23 @@ export async function startLogin() {
   // 1. PKCE Generation
   const verifier = base64URLEncode(crypto.randomBytes(32));
   const challenge = base64URLEncode(
-    crypto.createHash("sha256").update(verifier).digest()
+    crypto.createHash("sha256").update(verifier).digest(),
   );
   const state = base64URLEncode(crypto.randomBytes(16));
 
   // 2. Store verifier in cookie for callback verification
   const cookieStore = await cookies();
-  cookieStore.set("verifier", verifier, { 
-    httpOnly: true, 
+  cookieStore.set("verifier", verifier, {
+    httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    sameSite: "lax"
+    sameSite: "lax",
   });
-  cookieStore.set("state", state, { 
-    httpOnly: true, 
+  cookieStore.set("state", state, {
+    httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    sameSite: "lax"
+    sameSite: "lax",
   });
 
   // 3. Redirect to Monad ID

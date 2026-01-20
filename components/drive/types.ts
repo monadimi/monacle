@@ -1,34 +1,30 @@
-export type FileRecord = {
+export interface FileRecord {
   id: string;
   collectionId: string;
-  collectionName?: string;
-  file: string[] | string;
-  owner: string;
-  share_type: 'none' | 'view' | 'edit';
-  is_shared: boolean;
-  short_id?: string;
+  collectionName: string;
   created: string;
   updated: string;
-  name?: string;
-  size?: number;
-  folder?: string;
-  tVersion?: number;
-  expand?: {
-    owner?: {
-      name?: string;
-      email?: string;
-    }
-  }
-};
-
-export type FolderRecord = {
-  id: string;
-  collectionId?: string;
-  collectionName?: string;
   name: string;
+  file: string | string[]; // Can be string or array depending on PB setup
+  size: number;
   owner: string;
-  parent: string;
+  folder?: string;
+  is_shared?: boolean;
+  share_type?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  expand?: any;
+  short_id?: string;
+}
+
+export interface FolderRecord {
+  id: string;
+  collectionId: string;
+  collectionName: string;
   created: string;
   updated: string;
-  tVersion?: number;
-};
+  name: string;
+  parent?: string;
+  owner: string;
+  is_shared?: boolean;
+  share_type?: string;
+}
