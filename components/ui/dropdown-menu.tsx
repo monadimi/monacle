@@ -3,8 +3,8 @@ import * as React from "react"
 import { createPortal } from "react-dom"
 import { cn } from "@/lib/utils"
 
-const DropdownMenuContext = React.createContext<{ 
-  open: boolean; 
+const DropdownMenuContext = React.createContext<{
+  open: boolean;
   setOpen: React.Dispatch<React.SetStateAction<boolean>>;
   triggerRect: DOMRect | null;
   setTriggerRect: React.Dispatch<React.SetStateAction<DOMRect | null>>;
@@ -57,15 +57,24 @@ export const DropdownMenuTrigger = ({ children, asChild }: { children: React.Rea
   };
 
   if (asChild && React.isValidElement(children)) {
-    return React.cloneElement(children as any, {
-      ref: (node: any) => {
+    // Determine the child's ref type to properly forward it
+    const childCmp = children as React.ReactElement<any>;
+    const childRef = (childCmp as any).ref;
+
+    return React.cloneElement(childCmp, {
+      ref: (node: HTMLDivElement | null) => {
         // Handle existing ref if any
-        if (typeof (children as any).ref === 'function') (children as any).ref(node);
-        else if ((children as any).ref) (children as any).ref.current = node;
-        (ref as any).current = node;
+        if (typeof childRef === 'function') {
+          childRef(node);
+        } else if (childRef && typeof childRef === 'object' && 'current' in childRef) {
+          (childRef as React.MutableRefObject<any>).current = node;
+        }
+
+        // Handle local ref
+        (ref as React.MutableRefObject<any>).current = node;
       },
       onClick: (e: React.MouseEvent) => {
-        (children as React.ReactElement<{ onClick?: (e: React.MouseEvent) => void }>).props.onClick?.(e);
+        childCmp.props.onClick?.(e);
         toggle(e);
       }
     });
@@ -78,17 +87,17 @@ export const DropdownMenuTrigger = ({ children, asChild }: { children: React.Rea
   );
 };
 
-export const DropdownMenuContent = ({ 
-  children, 
-  className, 
-  align = "end", 
+export const DropdownMenuContent = ({
+  children,
+  className,
+  align = "end",
   side = "bottom",
   sideOffset = 4,
   collisionPadding = 20
-}: { 
-  children: React.ReactNode; 
-  className?: string; 
-  align?: 'start' | 'center' | 'end'; 
+}: {
+  children: React.ReactNode;
+  className?: string;
+  align?: 'start' | 'center' | 'end';
   side?: 'top' | 'bottom';
   sideOffset?: number;
   collisionPadding?: number;

@@ -1,3 +1,10 @@
+/**
+ * @file components/FileModals.tsx
+ * @purpose Specialized modals for file operations (Detail, Rename, Move, Share).
+ * @scope Modal UI, Preview rendering, Form handling for file actions.
+ * @out-of-scope File list state management (parent responsibility).
+ * @failure-behavior Displays alerts on action failure.
+ */
 "use client";
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -260,7 +267,7 @@ export function MoveModal({
       setHistory([]);
       fetchFolders(null);
     }
-  }, [isOpen]);
+  }, [isOpen, fetchFolders]);
 
 
 
@@ -426,7 +433,7 @@ export function ShareModal({
       setShortId(sid);
       setOriginalShortId(sid);
       setIsShared(file.is_shared || file.share_type !== 'none');
-      setShareType(file.share_type === 'none' ? 'view' : file.share_type);
+      setShareType(file.share_type === 'none' ? 'view' : (file.share_type || 'view'));
     }
   }, [file]);
 

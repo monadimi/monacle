@@ -31,7 +31,7 @@ const templates = [
   { id: "t6", title: "아이디어 보드", type: "board", icon: LayoutDashboard, color: "bg-pink-500" },
 ];
 
-export default function CoworkInterface({ initialItems = [] }: { initialItems?: any[] }) {
+export default function CoworkInterface({ initialItems = [] }: { initialItems?: Record<string, any>[] }) {
   const router = useRouter();
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [items, setItems] = useState(() =>
@@ -44,7 +44,7 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
       .map(item => {
         const date = new Date(item.updated || item.created);
         const dateStr = isNaN(date.getTime()) ? "방금 전" : date.toLocaleDateString();
-        
+
         return {
           id: item.id,
           title: item.title,
@@ -81,13 +81,13 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
       if (result.success && result.id) router.push(`/dashboard/cowork/board/${result.id}`);
       else alert("보드 생성 실패: " + result.error);
     } else if (type === 'slide') {
-       const result = await createDeck();
-       if (result.success && result.id) router.push(`/dashboard/cowork/slides/${result.id}`);
-       else alert("프레젠테이션 생성 실패: " + result.error);
+      const result = await createDeck();
+      if (result.success && result.id) router.push(`/dashboard/cowork/slides/${result.id}`);
+      else alert("프레젠테이션 생성 실패: " + result.error);
     } else if (type === 'sheet') {
-       const result = await createSheet();
-       if (result.success && result.id) router.push(`/dashboard/cowork/sheets/${result.id}`);
-       else alert("스프레드시트 생성 실패: " + result.error);
+      const result = await createSheet();
+      if (result.success && result.id) router.push(`/dashboard/cowork/sheets/${result.id}`);
+      else alert("스프레드시트 생성 실패: " + result.error);
     } else {
       alert(`${type} 생성 기능은 준비 중입니다!`);
     }
@@ -271,10 +271,10 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
               <Plus className="w-8 h-8 group-hover:rotate-90 transition-transform duration-500" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent 
-            side="top" 
-            align="end" 
-            sideOffset={15} 
+          <DropdownMenuContent
+            side="top"
+            align="end"
+            sideOffset={15}
             collisionPadding={20}
             className="w-64 p-2 rounded-2xl border-slate-100 shadow-2xl bg-white/95 backdrop-blur-xl z-[70] max-h-[calc(100vh-100px)] overflow-y-auto custom-scroll"
           >
