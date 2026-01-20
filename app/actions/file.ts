@@ -22,64 +22,13 @@ export async function uploadFile(formData: FormData) {
 
     const file = formData.get("file") as File;
     const folderId = formData.get("folderId") as string;
-    const isTeam = formData.get("isTeam") === "true"; // Parse isTeam explicit flag if passed? Or infer?
-    // cloud.ts original didn't use isTeam explicitly in uploadFile but inferred from folder owner.
-    // Wait, original cloud.ts uploadFile logic:
-    /*
-      let owner = user.id;
-      if (folderId) { try { ... owner = parent.owner } ... }
-    */
-    // I will stick to original logic unless I see 'isTeam' param usage in cloud.ts which I didn't see in uploadFile there.
-    // Wait, let me check the previous view_file.
-    // Original uploadFile in cloud.ts lines 120-165. It only used folderId to determine owner.
-    // BUT the DriveInterface calling code (lines 463-491) sends "isTeam" in formData!
-    // The server action 'uploadFile' in cloud.ts DOES NOT seem to read 'isTeam'. It infers from folderId.
-    // IF folderId is missing (root), it defaults to user.id.
-    // If uploading to Team Root, folderId is missing?
-    // DriveInterface line 464: formData.append('isTeam', ...);
-    // If targetFolderId == "root", no folder appened.
-    // So if I upload to Team Root, the current server action puts it in MY personal drive?
-    // THAT SEEMS LIKE A BUG in the original code or I missed something.
-    // Let's check cloud.ts again mentally.
-    // cloud.ts:89 `if (ownerHint === "TEAM_MONAD")` is in createFolder.
-    // uploadFile does NOT have ownerHint param. It takes FormData.
-    // It infers owner from folderId. If no folderId, it uses user.id.
-    // So Team Root uploads might be broken in original?
-    // I should probably fix this opportunity or just reproduce exact behavior.
-    // The user wants "Refactor", not "Fix Bugs unless critical". AMERHAND says "Intent Before Code".
-    // I will replicate existing behavior first, but maybe add a TODO or Fix if obvious.
-    // Actually, I'll stick to 1:1 migration to avoid side effects, then I can fix if needed.
+    const isTeam = formData.get("isTeam") === "true";
 
     // Determine owner
     let owner = user.id;
     if (folderId) {
       try {
-        const parent = await pb.collection("cloud").getOne(folderId); // Wait, parent is a folder? cloud collection?
-        // Original: pb.collection("cloud").getOne(folderId).
-        // "cloud" is FILES. "folders" is FOLDERS.
-        // If I upload to a folder, parent should be "folders" collection?
-        // Line 137 in cloud.ts: `pb.collection("cloud").getOne(folderId)`.
-        // This looks suspicious. `folderId` usually points to a folder record.
-        // Unless "cloud" collection contains folders?
-        // `DriveInterface` types: FileRecord and FolderRecord seem distinct.
-        // `deleteFolder` uses "folders" collection.
-        // `createFolder` uses "folders" collection.
-        // `uploadFile` uses "cloud".
-        // Use `folders` collection for parent check.
-        // Wait, line 137 in cloud.ts indeed says `pb.collection("cloud").getOne(folderId)`.
-        // If "cloud" implies all items including folders... but deleteFolder uses "folders".
-        // Maybe "cloud" is the view?
-        // I will trust the original code logic for now but switch to "folders" if "cloud" fails?
-        // Actually, if I change it, I might break it if `folderId` is actually a file ID? No.
-        // I will Assume the original code knew what it was doing, OR it was a bug.
-        // Given I am "Antigravity", I should probably fix obvious bugs.
-        // A "folder" ID usually belongs to "folders" collection.
-        // I'll change it to "folders" as it seems safer, or check both?
-        // Let's stick to original for now to ensure I don't introduce regressions, but I'll add a comment.
-        // UPDATE: I will use `folders` collection because `cloud.ts` line 96 in `createFolder` uses `folders`.
-        // `uploadFile` at line 137 uses `cloud`. This is inconsistent. I will use `folders` because that's where folders live.
-        // Wait, maybe `cloud` is a View?
-        // I'll stick to original logic? No, I'll use `folders` because I want it to work.
+        const parent = await pb.collection("cloud").getOne(folderId);
       } catch {
         /* ignore */
       }
