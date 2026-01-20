@@ -290,34 +290,7 @@ export function MoveModal({
   const handleMove = async () => {
     if (!file) return;
     if (!currentFolderId && currentFolderId !== null) {
-      // check only if strictly undefined or empty string if that was the semantic, 
-      // but currentFolderId initializes to null usually?
-      // In component: const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
-      // Wait, if it is null, it means Root.
-      // So !currentFolderId is true for null.
-      // We want to allow null.
-
-      // Actually the previous validation was:
-      // if (!currentFolderId && currentFolderId !== "") { alert... }
-      // This implies explicit "" was allowed?
-
-      // Let's rely on explicit UI selection.
-      // If the user clicked "Move Here", and currentFolderId is null, it means Root.
-      // So this validation might be blocking root moves if not careful.
-      // Let's remove it if it blocks null.
-
     }
-    // Logic: 
-    // If currentFolderId is null -> Root.
-    // We pass "" to server for Root.
-
-    // So the check should be: are we 'ready'?
-    // Defaults to null (Ready at root).
-    // So we don't need to force selection if we default to root.
-
-    // But if we want to force user to 'select' something?
-    // With the new UI, "Root" is selected by default or explicitly.
-    // So let's allow it.
 
     if (file.id === currentFolderId) return; // Can't move into self (if it was a folder)
 

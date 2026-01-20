@@ -1,3 +1,10 @@
+/**
+ * @file app/api/proxy/file/[...path]/route.ts
+ * @purpose Proxies file requests to PocketBase, handling authentication, caching, and stitching of large files.
+ * @scope File streaming, Access control (Shared/Owner/Team), HTTP Caching (ETag/Last-Modified).
+ * @out-of-scope File uploading, metadata modification.
+ * @failure-behavior Returns 404 for missing files, 401/403 for unauthorized access, 500 for internal errors.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import PocketBase, { RecordModel } from "pocketbase";
 import { cookies } from "next/headers";

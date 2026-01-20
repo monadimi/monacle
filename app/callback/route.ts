@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
 
   if (error) {
     return NextResponse.redirect(
-      new URL(`/?error=${encodeURIComponent(error)}`, baseUrl)
+      new URL(`/?error=${encodeURIComponent(error)}`, baseUrl),
     );
   }
 
@@ -38,17 +38,26 @@ export async function GET(req: NextRequest) {
   const storedState = cookieStore.get("state")?.value;
 
   console.log("[Callback] Request Params:", { code: !!code, state, error });
-  console.log("[Callback] Stored Cookies:", { verifier: !!storedVerifier, state: storedState });
+  console.log("[Callback] Stored Cookies:", {
+    verifier: !!storedVerifier,
+    state: storedState,
+  });
 
   if (!state || !storedState || state !== storedState) {
-    console.error("[Callback] State mismatch:", { received: state, stored: storedState });
+    console.error("[Callback] State mismatch:", {
+      received: state,
+      stored: storedState,
+    });
     return NextResponse.redirect(new URL("/?error=state_mismatch", baseUrl));
   }
 
   if (!code || !storedVerifier) {
-    console.error("[Callback] Missing code or verifier:", { code: !!code, verifier: !!storedVerifier });
+    console.error("[Callback] Missing code or verifier:", {
+      code: !!code,
+      verifier: !!storedVerifier,
+    });
     return NextResponse.redirect(
-      new URL("/?error=no_code_or_verifier", baseUrl)
+      new URL("/?error=no_code_or_verifier", baseUrl),
     );
   }
 
@@ -72,7 +81,7 @@ export async function GET(req: NextRequest) {
       const errText = await tokenRes.text();
       console.error("Token exchange failed:", tokenRes.status, errText);
       return NextResponse.redirect(
-        new URL("/?error=token_exchange_failed", baseUrl)
+        new URL("/?error=token_exchange_failed", baseUrl),
       );
     }
 
@@ -82,7 +91,7 @@ export async function GET(req: NextRequest) {
     if (!accessToken || typeof accessToken !== "string") {
       console.error("Token response missing access_token:", tokenJson);
       return NextResponse.redirect(
-        new URL("/?error=token_exchange_failed", baseUrl)
+        new URL("/?error=token_exchange_failed", baseUrl),
       );
     }
 
@@ -97,7 +106,7 @@ export async function GET(req: NextRequest) {
       const errText = await userRes.text();
       console.error("User info fetch failed:", userRes.status, errText);
       return NextResponse.redirect(
-        new URL("/?error=user_fetch_failed", baseUrl)
+        new URL("/?error=user_fetch_failed", baseUrl),
       );
     }
 
@@ -105,7 +114,7 @@ export async function GET(req: NextRequest) {
 
     if (userData?.type !== "monad") {
       return NextResponse.redirect(
-        new URL("/?error=unauthorized_type", baseUrl)
+        new URL("/?error=unauthorized_type", baseUrl),
       );
     }
 
@@ -115,21 +124,25 @@ export async function GET(req: NextRequest) {
       !userData.email.endsWith("@monad.io.kr")
     ) {
       return NextResponse.redirect(
-        new URL("/?error=unauthorized_domain", baseUrl)
+        new URL("/?error=unauthorized_domain", baseUrl),
       );
     }
 
     // --- Sync with PocketBase ---
     const pb = await getAdminClient();
     let pbUser;
-    
+
     try {
-      pbUser = await pb.collection("users").getFirstListItem(`email="${userData.email}"`);
+      pbUser = await pb
+        .collection("users")
+        .getFirstListItem(`email="${userData.email}"`);
       console.log("[Callback] Found existing PB user:", pbUser.id);
     } catch {
       console.log("[Callback] PB user not found, creating one...");
       // Create user if not exists
-      const randomPassword = Math.random().toString(36).slice(-12) + Math.random().toString(36).slice(-12);
+      const randomPassword =
+        Math.random().toString(36).slice(-12) +
+        Math.random().toString(36).slice(-12);
       pbUser = await pb.collection("users").create({
         email: userData.email,
         password: randomPassword,
@@ -141,7 +154,10 @@ export async function GET(req: NextRequest) {
       console.log("[Callback] Created new PB user:", pbUser.id);
     }
 
-    const isProd = process.env.NODE_ENV === "production";
+    const isProd =
+      process.env.NODE_ENV === "production" &&
+      !baseUrl.includes("localhost") &&
+      !baseUrl.includes("127.0.0.1");
 
     const res = NextResponse.redirect(new URL("/dashboard", baseUrl));
 
@@ -151,16 +167,20 @@ export async function GET(req: NextRequest) {
       name: pbUser.name,
       email: pbUser.email,
       avatar: pbUser.avatar,
-      token: accessToken
+      token: accessToken,
     };
 
-    res.cookies.set("monacle_session", encodeURIComponent(JSON.stringify(sessionData)), {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: "lax",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 7,
-    });
+    res.cookies.set(
+      "monacle_session",
+      encodeURIComponent(JSON.stringify(sessionData)),
+      {
+        httpOnly: true,
+        secure: isProd,
+        sameSite: "lax",
+        path: "/",
+        maxAge: 60 * 60 * 24 * 7,
+      },
+    );
 
     res.cookies.set("monacle_token", accessToken, {
       httpOnly: true,

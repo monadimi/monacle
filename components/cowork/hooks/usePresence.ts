@@ -79,11 +79,6 @@ export function usePresence(
 
       setActiveEditors((prev) => {
         const combined = local ? [local, ...next] : next;
-        // Optimization: only merge if needed, but for now just suppress unused prev if we don't use it
-        // Actually we are not using prev here?
-        // Wait, the logic `const combined = local ? [local, ...next] : next;` replaces the whole list.
-        // It should probably merge with `prev` if we wanted to keep some? But presence usually replaces snapshot.
-        // If we don't use prev, we should remove it from args or prefix with _.
         return mergeEditors(combined);
       });
     } catch {
