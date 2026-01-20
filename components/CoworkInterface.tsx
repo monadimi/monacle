@@ -26,7 +26,7 @@ const templates = [
   { id: "t1", title: "빈 문서", type: "doc", icon: FileText, color: "bg-blue-500" },
   { id: "t2", title: "회의록", type: "doc", icon: FileText, color: "bg-blue-500" },
   { id: "t3", title: "프로젝트 트래커", type: "sheet", icon: Table, color: "bg-emerald-500" },
-  { id: "t4", title: "피치 데크", type: "slide", icon: Presentation, color: "bg-amber-500" },
+  // { id: "t4", title: "피치 데크", type: "slide", icon: Presentation, color: "bg-amber-500" },
   { id: "t5", title: "피드백 설문", type: "form", icon: FormInput, color: "bg-purple-500" },
   { id: "t6", title: "아이디어 보드", type: "board", icon: LayoutDashboard, color: "bg-pink-500" },
 ];
@@ -314,7 +314,7 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
                 <span className="text-[11px] text-slate-400">무한 캔버스 화이트보드</span>
               </div>
             </DropdownMenuItem>
-            <DropdownMenuItem className="p-3 cursor-pointer rounded-xl focus:bg-amber-50 focus:text-amber-700 transition-colors" onClick={() => handleCreate('slide')}>
+            {/* <DropdownMenuItem className="p-3 cursor-pointer rounded-xl focus:bg-amber-50 focus:text-amber-700 transition-colors" onClick={() => handleCreate('slide')}>
               <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center mr-4 text-amber-600 shadow-sm">
                 <Presentation className="w-5 h-5" />
               </div>
@@ -322,7 +322,7 @@ export default function CoworkInterface({ initialItems = [] }: { initialItems?: 
                 <span className="font-bold text-sm">새 프레젠테이션</span>
                 <span className="text-[11px] text-slate-400">디자이너급 슬라이드</span>
               </div>
-            </DropdownMenuItem>
+            </DropdownMenuItem> */}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

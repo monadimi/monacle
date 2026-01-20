@@ -414,11 +414,11 @@ export default function SlideEditor({ initialData, readOnly = false }: SlideEdit
                     window.addEventListener('mouseup', upHandler);
                 }}
             >
-                {/* Content Rendering */}
+                {/* Content Rendering - Hide when editing text to prevent double-vision */}
                 {el.type === 'text' ? (
                     <div
-                        className="w-full h-full flex flex-col justify-center" // Vertically centered by default
-                        style={{ justifyContent }} // Horizontal align via flex
+                        className={cn("w-full h-full flex flex-col justify-center", isSelected && "opacity-0")}
+                        style={{ justifyContent }}
                     >
                         <div style={{
                             fontFamily: el.style?.fontFamily || 'inherit',
@@ -442,7 +442,7 @@ export default function SlideEditor({ initialData, readOnly = false }: SlideEdit
                     <div
                         contentEditable
                         suppressContentEditableWarning
-                        className="absolute inset-0 outline-none cursor-text ring-1 ring-blue-400 border-0 bg-transparent text-transparent caret-black selection:bg-blue-200 z-[60]"
+                        className="absolute inset-0 outline-none cursor-text ring-1 ring-blue-400 border-0 bg-transparent caret-black selection:bg-blue-200 z-[60]"
                         onBlur={(e) => updateElement(el.id, { content: e.currentTarget.innerText })}
                         onKeyDown={(e) => e.stopPropagation()}
                         style={{
@@ -450,8 +450,9 @@ export default function SlideEditor({ initialData, readOnly = false }: SlideEdit
                             flexDirection: 'column',
                             justifyContent: 'center', // Match viewing vertical align
                             textAlign: textAlign as TextAlign,
-                            fontSize: el.style?.fontSize, // Match viewing font size for caret
+                            fontSize: el.style?.fontSize,
                             fontFamily: el.style?.fontFamily,
+                            color: el.style?.color || 'inherit', // Explicitly inherit color
                             padding: 0 // Ensure exact overlap
                         }}
                     >
@@ -468,7 +469,7 @@ export default function SlideEditor({ initialData, readOnly = false }: SlideEdit
     if (!initialData) return <div>Data not found</div>;
 
     return (
-        <div className={cn("flex flex-col h-[calc(100vh-64px)] bg-slate-100 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 overflow-hidden select-none", isPresenting && "fixed inset-0 z-[9999] bg-black")}>
+        <div className={cn("flex flex-col h-[calc(100vh-3.5rem)] -m-8 bg-slate-100 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 overflow-hidden select-none", isPresenting && "fixed inset-0 z-[9999] bg-black m-0")}>
             {/* (Header same as before) */}
             {!isPresenting && (
                 <header className="h-14 bg-white border-b flex items-center px-4 justify-between z-10 shrink-0">
@@ -481,7 +482,7 @@ export default function SlideEditor({ initialData, readOnly = false }: SlideEdit
                             onChange={(e) => { setTitle(e.target.value); debouncedSave(slides, e.target.value); }}
                             className="text-lg font-bold bg-transparent outline-none ring-offset-2 focus:ring-2 rounded-md transition-all"
                         />
-                        <div className="text-xs text-slate-400">
+                        <div className="text-xs text-slate-500 font-medium">
                             {saveStatus === 'saving' ? 'Saving...' : 'Saved'}
                         </div>
                     </div>
@@ -504,8 +505,8 @@ export default function SlideEditor({ initialData, readOnly = false }: SlideEdit
                                     key={slide.id}
                                     onClick={() => setCurrentSlideIndex(idx)}
                                     className={cn(
-                                        "aspect-video bg-white rounded-lg shadow-sm border-2 transition-all cursor-pointer relative group flex items-center justify-center text-xs text-slate-300",
-                                        currentSlideIndex === idx ? "border-indigo-500 ring-2 ring-indigo-200" : "border-slate-100 hover:border-slate-300"
+                                        "aspect-video bg-white rounded-lg shadow-sm border-2 transition-all cursor-pointer relative group flex items-center justify-center text-xs text-slate-700 font-medium",
+                                        currentSlideIndex === idx ? "border-indigo-500 ring-2 ring-indigo-200" : "border-slate-200 hover:border-slate-300"
                                     )}
                                 >
                                     <span>Slide {idx + 1}</span>
@@ -572,14 +573,14 @@ export default function SlideEditor({ initialData, readOnly = false }: SlideEdit
                 )}
 
                 <main
-                    className={cn("flex-1 bg-slate-100 relative flex items-center justify-center overflow-hidden", isPresenting && "bg-black")}
+                    className={cn("flex-1 bg-slate-100 relative flex items-center justify-center overflow-auto", isPresenting && "bg-black")}
                     onMouseDown={() => setSelection([])}
                 >
                     <div
                         className={cn(
-                            "bg-white shadow-2xl relative transition-all duration-500 overflow-hidden shrink-0 origin-center",
-                            // Removed w-screen h-screen for presentation, handling via style scale
-                            !isPresenting && "w-[800px] h-[450px]"
+                            "bg-white shadow-2xl relative transition-all duration-500 overflow-hidden shrink-0 origin-center select-none",
+                            // Use HD resolution primarily, scale down if needed via CSS zoom if implemented later
+                            !isPresenting && "w-[1280px] h-[720px] ring-1 ring-slate-900/5"
                         )}
                         style={{
                             backgroundColor: currentSlide?.background?.type === 'solid' ? (currentSlide.background.value || '#ffffff') : '#ffffff',
@@ -589,10 +590,9 @@ export default function SlideEditor({ initialData, readOnly = false }: SlideEdit
                             backgroundSize: currentSlide?.background?.type === 'image' ? 'cover' : undefined,
                             backgroundPosition: currentSlide?.background?.type === 'image' ? 'center' : undefined,
                             // Presentation Scaling Logic
-                            // FIX: Keep base resolution 800x450 to match element coordinates, just scale up visually.
-                            width: 800,
-                            height: 450,
-                            transform: isPresenting ? `scale(${Math.min(window.innerWidth / 800, window.innerHeight / 450)})` : undefined
+                            width: 1280,
+                            height: 720,
+                            transform: isPresenting ? `scale(${Math.min(window.innerWidth / 1280, window.innerHeight / 720)})` : undefined
                         }}
                         onMouseDown={(e) => e.stopPropagation()}
                     >
