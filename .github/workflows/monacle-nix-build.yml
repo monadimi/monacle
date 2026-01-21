@@ -26,23 +26,29 @@ jobs:
             experimental-features = nix-command flakes
             accept-flake-config = true
 
-      - name: Nix build monacle-run (flake evaluation + derivations)
+      - name: Nix build monacle-run
         working-directory: infra
         run: |
           set -euo pipefail
           nix build -L .#monacle-run
 
-      - name: Build pinned node from flake and add to PATH
+      - name: Build pinned node and add to PATH
         working-directory: infra
         run: |
           set -euo pipefail
           nix build -L .#nodejs_20_20_0 -o ./node
           echo "$PWD/node/bin" >> "$GITHUB_PATH"
+
+      - name: Debug node/npm
+        run: |
+          set -euo pipefail
+          which node
+          which npm
           node -v
           npm -v
 
-      - name: Next build (using pinned node)
+      - name: Next build
         run: |
           set -euo pipefail
-          npm ci
+          npm ci --include=dev
           npm run build
