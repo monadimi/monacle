@@ -1,0 +1,60 @@
+name: build only (nix + next)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      NIX_CONFIG: experimental-features = nix-command flakes
+      NODE_ENV: production
+
+      NEXT_PUBLIC_BASE_URL: ${{ secrets.NEXT_PUBLIC_BASE_URL }}
+      POCKETBASE_API_URL: ${{ secrets.POCKETBASE_API_URL }}
+      MONAD_CLIENT_ID: ${{ secrets.MONAD_CLIENT_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Nix build (same as production ExecStartPre)
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          nix build -L .#monacle-run
+
+      - name: Use pinned Node from flake
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          nix build -L .#nodejs_20_20_0 -o ./node
+          echo "$PWD/node/bin" >> "$GITHUB_PATH"
+          node -v
+          npm -v
+
+      - name: Check required env for build
+        run: |
+          set -euo pipefail
+          need() { [ -n "${2:-}" ] || { echo "Missing secret/env: $1" >&2; exit 1; }; }
+          need NEXT_PUBLIC_BASE_URL "${NEXT_PUBLIC_BASE_URL:-}"
+          need POCKETBASE_API_URL "${POCKETBASE_API_URL:-}"
+          need MONAD_CLIENT_ID "${MONAD_CLIENT_ID:-}"
+
+      - name: Next build
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
