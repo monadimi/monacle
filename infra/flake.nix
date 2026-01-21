@@ -64,11 +64,6 @@
               NPM_CACHE="$CACHE_DIR/npm"
 
               PORT=3000
-              export MONAD_CLIENT_ID=ouzfym6qfgfpmop
-              export NEXT_PUBLIC_BASE_URL="https://monacle.snowman0919.site"
-              export POCKETBASE_ADMIN_EMAIL="cloud-worker01@monad.io.kr"
-              export POCKETBASE_ADMIN_PASSWORD="m0WBlFC70-c4WFl"
-              export POCKETBASE_API_URL="https://monadb.snowman0919.site"
               export NODE_ENV="production"
               export NPM_CONFIG_CACHE="$NPM_CACHE"
               export PORT

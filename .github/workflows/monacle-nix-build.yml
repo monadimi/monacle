@@ -1,4 +1,4 @@
-name: build only (nix + next)
+name: build only (nix pinned node + next build)
 
 on:
   push:
@@ -10,7 +10,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     env:
       NIX_CONFIG: experimental-features = nix-command flakes
       NODE_ENV: production
@@ -30,13 +29,13 @@ jobs:
             experimental-features = nix-command flakes
             accept-flake-config = true
 
-      - name: Nix build (same as production ExecStartPre)
+      - name: Nix build monacle-run (flake evaluation + derivations)
         working-directory: infra
         run: |
           set -euo pipefail
           nix build -L .#monacle-run
 
-      - name: Use pinned Node from flake
+      - name: Build pinned node from flake and add to PATH
         working-directory: infra
         run: |
           set -euo pipefail
@@ -45,7 +44,7 @@ jobs:
           node -v
           npm -v
 
-      - name: Check required env for build
+      - name: Verify required env for Next build
         run: |
           set -euo pipefail
           need() { [ -n "${2:-}" ] || { echo "Missing secret/env: $1" >&2; exit 1; }; }
@@ -53,7 +52,7 @@ jobs:
           need POCKETBASE_API_URL "${POCKETBASE_API_URL:-}"
           need MONAD_CLIENT_ID "${MONAD_CLIENT_ID:-}"
 
-      - name: Next build
+      - name: Next build (using pinned node)
         run: |
           set -euo pipefail
           npm ci
