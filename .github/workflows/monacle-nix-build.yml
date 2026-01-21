@@ -2,7 +2,7 @@ name: build only (nix pinned node + next build)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "dev", "main" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
@@ -10,13 +10,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     env:
       NIX_CONFIG: experimental-features = nix-command flakes
       NODE_ENV: production
-
-      NEXT_PUBLIC_BASE_URL: ${{ secrets.NEXT_PUBLIC_BASE_URL }}
-      POCKETBASE_API_URL: ${{ secrets.POCKETBASE_API_URL }}
-      MONAD_CLIENT_ID: ${{ secrets.MONAD_CLIENT_ID }}
 
     steps:
       - name: Checkout
@@ -43,14 +40,6 @@ jobs:
           echo "$PWD/node/bin" >> "$GITHUB_PATH"
           node -v
           npm -v
-
-      - name: Verify required env for Next build
-        run: |
-          set -euo pipefail
-          need() { [ -n "${2:-}" ] || { echo "Missing secret/env: $1" >&2; exit 1; }; }
-          need NEXT_PUBLIC_BASE_URL "${NEXT_PUBLIC_BASE_URL:-}"
-          need POCKETBASE_API_URL "${POCKETBASE_API_URL:-}"
-          need MONAD_CLIENT_ID "${MONAD_CLIENT_ID:-}"
 
       - name: Next build (using pinned node)
         run: |
