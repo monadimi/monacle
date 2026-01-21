@@ -81,7 +81,7 @@
 
               cd "$APP_DIR"
 
-              NODE_ENV=development npm ci
+              npm ci --include=dev
               NODE_ENV=production npm run build
               NODE_ENV=production exec npm run start
             '';
